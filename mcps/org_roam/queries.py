@@ -106,3 +106,15 @@ WHERE n.id NOT IN (SELECT DISTINCT source FROM links WHERE type = '"id"')
   AND n.id NOT IN (SELECT DISTINCT dest FROM links WHERE type = '"id"')
 ORDER BY n.title
 """
+
+GET_ALL_NODES = """
+SELECT id, title, file
+FROM nodes
+ORDER BY title
+"""
+
+GET_ALL_LINKS = f"""
+SELECT source, dest, type
+FROM links l
+WHERE {_ID_TYPE}
+"""

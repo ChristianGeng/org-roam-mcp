@@ -5,6 +5,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from . import queries
+from . import tools_advanced
 from .db import query
 from .db import quote_param
 from .emacs import emacs_eval
@@ -123,3 +124,6 @@ def register(mcp: FastMCP) -> None:
         if error:
             return f"Error: {error}"
         return "org-roam database synced successfully."
+
+    # Register advanced graph analysis tools
+    tools_advanced.register(mcp)
