@@ -67,11 +67,63 @@ Tools
      - Sync the org-roam database
 
 
+Advanced Graph Analysis Tools
+------------------------------
+
+These tools compute sophisticated graph algorithms to analyze your knowledge graph
+structure, identify communities, find bridge nodes, and suggest missing connections.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 35 40
+
+   * - Tool
+     - Parameters
+     - Description
+   * - ``org_roam_pagerank``
+     - ``limit: int = 20``
+     - Compute node importance scores using PageRank algorithm
+   * - ``org_roam_communities``
+     - ``resolution: float = 1.0``
+     - Detect topic clusters using Louvain algorithm
+   * - ``org_roam_betweenness``
+     - ``limit: int = 20``
+     - Find bridge nodes connecting different clusters
+   * - ``org_roam_closeness``
+     - ``limit: int = 20``
+     - Distance-based centrality scoring
+   * - ``org_roam_clustering_coefficient``
+     - ``node_id: str = None``
+     - Measure local density (tight clusters vs bridges)
+   * - ``org_roam_graph_stats``
+     - (none)
+     - Overall graph health metrics (density, diameter, components)
+   * - ``org_roam_suggest_links``
+     - ``node_id: str, limit: int = 10``
+     - Link prediction via common neighbors
+   * - ``org_roam_connected_components``
+     - (none)
+     - Identify isolated subgraphs needing integration
+
+**Algorithm Details:**
+
+- **PageRank:** Eigenvector-based importance (nodes with high-quality incoming links score higher)
+- **Louvain:** Community detection via modularity optimization (finds natural topic clusters)
+- **Betweenness Centrality:** Identifies synthesis points (nodes connecting disparate clusters)
+- **Closeness Centrality:** Average distance-based scoring (central hubs in graph structure)
+- **Clustering Coefficient:** Local density measurement (0-1, high = tight cluster, low = bridge)
+- **Graph Stats:** Density, diameter, components, average degree, modularity
+- **Link Suggestion:** Jaccard similarity via common neighbors (identifies unlinked nodes that should connect)
+- **Connected Components:** Weakly connected subgraphs (treats graph as undirected for connectivity)
+
 Requirements
 ------------
 
 - Python 3.10+
 - ``mcp`` package (installed via ``uv pip install mcp``)
+- ``networkx>=3.0`` (for advanced graph algorithms)
+- ``python-louvain>=0.16`` (for community detection)
+- ``scipy>=1.10`` (for PageRank computation)
 - Emacs with ``(server-start)`` for write tools and ``emacs_eval``
 - Read tools work without Emacs — they query SQLite directly
 
@@ -147,9 +199,10 @@ Source
 
     mcps/org_roam/
     ├── __init__.py
-    ├── server.py        # FastMCP entry point
-    ├── db.py            # SQLite connection + DB detection
-    ├── emacs.py         # emacsclient wrapper
-    ├── queries.py       # SQL templates
-    ├── tools_emacs.py   # Layer 1: emacs_eval
-    └── tools_roam.py    # Layer 2: org-roam tools
+    ├── server.py           # FastMCP entry point
+    ├── db.py               # SQLite connection + DB detection
+    ├── emacs.py            # emacsclient wrapper
+    ├── queries.py          # SQL templates
+    ├── tools_emacs.py      # Layer 1: emacs_eval
+    ├── tools_roam.py       # Layer 2: org-roam tools
+    └── tools_advanced.py   # Layer 3: advanced graph algorithms (networkx)
