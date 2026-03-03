@@ -6,31 +6,115 @@ import subprocess
 from pathlib import Path
 
 
-def detect_db() -> str:
-    """Locate the org-roam SQLite database.
+REQUIRED_TABLES = {"files", "nodes"}
+EMACS_DB_LOCATION_EVAL = (
+    "(progn "
+    "(require 'org-roam nil t) "
+    "(let ((loc (cond "
+    "((fboundp 'org-roam-db-location) (org-roam-db-location)) "
+    "((boundp 'org-roam-db-location) org-roam-db-location) "
+    "(t nil)))) "
+    "(when loc (princ loc))))"
+)
 
-    Detection order:
-    1. ORG_ROAM_DB environment variable
-    2. emacsclient --eval org-roam-db-location
-    3. Common filesystem locations
-    """
-    env_db = os.environ.get("ORG_ROAM_DB")
-    if env_db and Path(env_db).is_file():
-        return env_db
+
+def _extract_db_path(raw_output: str) -> str | None:
+    """Extract a potential database path from emacsclient output."""
+    if not raw_output:
+        return None
+
+    for line in reversed(raw_output.splitlines()):
+        candidate = line.strip().strip('"')
+        if not candidate or candidate == "nil":
+            continue
+        if candidate.endswith(".db"):
+            return candidate
+
+    candidate = raw_output.strip().strip('"')
+    if candidate and candidate != "nil" and candidate.endswith(".db"):
+        return candidate
+
+    return None
+
+
+def _is_valid_roam_db(db_path: Path) -> bool:
+    """Check whether a SQLite file looks like a usable org-roam DB."""
+    if not db_path.is_file():
+        return False
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cursor.fetchall()}
+    except sqlite3.Error:
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return REQUIRED_TABLES.issubset(tables)
+
+
+def _server_file_candidates() -> list[str]:
+    """Return likely Emacs server socket locations for the current user."""
+    uid = os.getuid()
+    return [
+        f"/run/user/{uid}/emacs/server",
+        f"/tmp/emacs{uid}/server",
+    ]
+
+
+def _detect_db_from_server(server_file: str | None = None) -> str | None:
+    """Try to detect org-roam DB path via emacsclient against a server."""
+    command = ["emacsclient"]
+    if server_file:
+        command.extend(["--server-file", server_file])
+    command.extend(["--eval", EMACS_DB_LOCATION_EVAL])
 
     try:
         result = subprocess.run(
-            ["emacsclient", "--eval", "org-roam-db-location"],
+            command,
             capture_output=True,
             text=True,
             timeout=5,
         )
-        if result.returncode == 0:
-            path = result.stdout.strip().strip('"')
-            if Path(path).is_file():
-                return path
     except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    detected_path = _extract_db_path(result.stdout)
+    if not detected_path:
+        return None
+
+    candidate = Path(detected_path).expanduser()
+    if _is_valid_roam_db(candidate):
+        return str(candidate)
+
+    return None
+
+
+def detect_db() -> str:
+    """Locate the org-roam SQLite database.
+
+    Detection order:
+    1. Emacs server introspection via emacsclient
+    2. ORG_ROAM_DB environment variable
+    3. Common filesystem locations
+    """
+    for server_file in [None, *_server_file_candidates()]:
+        server_db = _detect_db_from_server(server_file)
+        if server_db:
+            return server_db
+
+    env_db = os.environ.get("ORG_ROAM_DB")
+    if env_db:
+        env_path = Path(env_db).expanduser()
+        if _is_valid_roam_db(env_path):
+            return str(env_path)
 
     home = Path.home()
     candidates = [
@@ -42,11 +126,11 @@ def detect_db() -> str:
         home / ".local" / "share" / "emacs" / "org-roam.db",
     ]
     for loc in candidates:
-        if loc.is_file():
+        if _is_valid_roam_db(loc):
             return str(loc)
 
     raise FileNotFoundError(
-        "org-roam.db not found. Set ORG_ROAM_DB environment variable."
+        "org-roam.db not found via Emacs server, ORG_ROAM_DB, or known locations."
     )
 
 

@@ -8,6 +8,16 @@ import networkx as nx
 import pytest
 
 
+def _create_valid_roam_db(db_path: Path) -> None:
+    """Create a minimal valid org-roam database schema."""
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("CREATE TABLE nodes (id TEXT PRIMARY KEY, title TEXT, file TEXT)")
+    cursor.execute("CREATE TABLE files (file TEXT PRIMARY KEY)")
+    conn.commit()
+    conn.close()
+
+
 @pytest.fixture
 def test_db():
     """Create a temporary test database with sample org-roam structure."""
@@ -86,6 +96,76 @@ def test_db():
 
     # Cleanup
     Path(db_path).unlink()
+
+
+class TestDbDetectionHelpers:
+    """Test DB detection helper functions."""
+
+    def test_extract_db_path_handles_quoted_output(self):
+        """Extract DB path from quoted emacsclient output."""
+        import mcps.org_roam.db as db_module
+
+        output = '"/home/user/doom-emacs/.local/cache/org-roam.db"\n'
+        assert db_module._extract_db_path(output) == "/home/user/doom-emacs/.local/cache/org-roam.db"
+
+    def test_extract_db_path_ignores_nil(self):
+        """Ignore nil output from emacsclient."""
+        import mcps.org_roam.db as db_module
+
+        assert db_module._extract_db_path("nil\n") is None
+
+    def test_is_valid_roam_db_requires_nodes_and_files(self, tmp_path):
+        """Validate DB only when required tables are present."""
+        import mcps.org_roam.db as db_module
+
+        valid_db = tmp_path / "valid.db"
+        _create_valid_roam_db(valid_db)
+        assert db_module._is_valid_roam_db(valid_db)
+
+        invalid_db = tmp_path / "invalid.db"
+        conn = sqlite3.connect(invalid_db)
+        conn.execute("CREATE TABLE nodes (id TEXT PRIMARY KEY, title TEXT, file TEXT)")
+        conn.commit()
+        conn.close()
+        assert not db_module._is_valid_roam_db(invalid_db)
+
+
+class TestDbDetectionOrder:
+    """Test DB detection order semantics."""
+
+    def test_detect_db_prefers_server_over_env(self, monkeypatch, tmp_path):
+        """Prefer server-detected DB over environment variable DB."""
+        import mcps.org_roam.db as db_module
+
+        server_db = tmp_path / "server.db"
+        env_db = tmp_path / "env.db"
+        _create_valid_roam_db(server_db)
+        _create_valid_roam_db(env_db)
+
+        monkeypatch.setenv("ORG_ROAM_DB", str(env_db))
+        monkeypatch.setattr(
+            db_module,
+            "_detect_db_from_server",
+            lambda _server_file=None: str(server_db),
+        )
+
+        assert db_module.detect_db() == str(server_db)
+
+    def test_detect_db_uses_env_when_server_unavailable(self, monkeypatch, tmp_path):
+        """Use environment variable when server detection fails."""
+        import mcps.org_roam.db as db_module
+
+        env_db = tmp_path / "env.db"
+        _create_valid_roam_db(env_db)
+
+        monkeypatch.setenv("ORG_ROAM_DB", str(env_db))
+        monkeypatch.setattr(
+            db_module,
+            "_detect_db_from_server",
+            lambda _server_file=None: None,
+        )
+
+        assert db_module.detect_db() == str(env_db)
 
 
 class TestGraphLoading:
