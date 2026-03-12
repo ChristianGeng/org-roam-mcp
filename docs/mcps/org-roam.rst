@@ -128,6 +128,43 @@ Requirements
 - Read tools work without Emacs — they query SQLite directly
 
 
+Claude Code Setup
+-----------------
+
+Register the server using the Claude Code CLI.
+Prefer ``--scope user`` if you want org-roam available in all projects.
+
+.. code-block:: bash
+
+    # Available in all Claude Code projects
+    claude mcp add --scope user org-roam -- \
+      uv run --no-config --directory /path/to/cgeng-ai-skills python -m mcps.org_roam.server
+
+To enable it only for the current project:
+
+.. code-block:: bash
+
+    claude mcp add --scope local org-roam -- \
+      uv run --no-config --directory /path/to/cgeng-ai-skills python -m mcps.org_roam.server
+
+
+Verification
+------------
+
+.. code-block:: bash
+
+    claude mcp list
+
+You should see ``org-roam`` listed as connected.
+
+In a Claude Code chat session,
+try a quick call:
+
+.. code-block:: text
+
+    org_roam_find("search term")
+
+
 Database Detection
 ------------------
 
@@ -143,6 +180,19 @@ The server locates ``org-roam.db`` in this order:
    - ``~/.emacs.d/.local/cache/org-roam.db``
    - ``~/.config/emacs/org-roam.db``
    - ``~/.local/share/emacs/org-roam.db``
+
+.. dropdown:: Getting the DB path from a running Emacs server
+
+   If you have a running Emacs server (``M-x server-start``),
+   you can query the effective org-roam database path via ``emacsclient``.
+
+   .. code-block:: bash
+
+       # Prints the org-roam DB path (usually quoted)
+       emacsclient --eval '(org-roam-db-location)'
+
+       # Export ORG_ROAM_DB from Emacs (strips surrounding quotes)
+       export ORG_ROAM_DB=$(emacsclient --eval '(org-roam-db-location)' | tr -d '"')
 
 
 Registration
