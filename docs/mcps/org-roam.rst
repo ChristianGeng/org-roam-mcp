@@ -208,7 +208,7 @@ Registered globally in ``~/.claude.json``:
           "command": "uv",
           "args": [
             "run", "--no-config", "--directory",
-            "/home/cgeng/work/cgeng/cgeng-ai-skills",
+            "$HOME/work/cgeng/cgeng-ai-skills",
             "python", "-m", "mcps.org_roam.server"
           ]
         }
