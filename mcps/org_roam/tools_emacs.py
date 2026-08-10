@@ -16,6 +16,7 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             expr: Any Elisp expression, e.g. "(+ 1 2)" or "(org-roam-db-sync)"
+
         """
         result, error = emacs.emacs_eval(expr)
         if error:

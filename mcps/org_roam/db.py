@@ -1,9 +1,9 @@
 """SQLite connection and org-roam database detection."""
 
 import os
+from pathlib import Path
 import sqlite3
 import subprocess
-from pathlib import Path
 
 
 REQUIRED_TABLES = {"files", "nodes"}

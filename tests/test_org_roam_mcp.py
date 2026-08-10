@@ -1,8 +1,8 @@
 """Test suite for org-roam MCP tools."""
 
+from pathlib import Path
 import sqlite3
 import tempfile
-from pathlib import Path
 
 import networkx as nx
 import pytest
@@ -173,10 +173,9 @@ class TestGraphLoading:
 
     def test_load_graph_basic(self, test_db):
         """Test that graph loads with correct node and edge counts."""
-        from mcps.org_roam.tools_advanced import _load_graph_from_db
-
         # Monkey-patch db module to use test database
         import mcps.org_roam.db as db_module
+        from mcps.org_roam.tools_advanced import _load_graph_from_db
 
         original_detect = db_module.detect_db
 
@@ -199,9 +198,8 @@ class TestGraphLoading:
 
     def test_orphaned_node_detection(self, test_db):
         """Test that orphaned nodes have zero in-degree and out-degree."""
-        from mcps.org_roam.tools_advanced import _load_graph_from_db
-
         import mcps.org_roam.db as db_module
+        from mcps.org_roam.tools_advanced import _load_graph_from_db
 
         original_detect = db_module.detect_db
 
@@ -228,9 +226,8 @@ class TestPageRank:
 
     def test_pagerank_scores_exist(self, test_db):
         """Test that PageRank produces scores for all nodes."""
-        from mcps.org_roam.tools_advanced import _load_graph_from_db
-
         import mcps.org_roam.db as db_module
+        from mcps.org_roam.tools_advanced import _load_graph_from_db
 
         original_detect = db_module.detect_db
 
@@ -261,9 +258,8 @@ class TestCentrality:
 
     def test_betweenness_identifies_bridges(self, test_db):
         """Test that betweenness centrality is computed for all nodes."""
-        from mcps.org_roam.tools_advanced import _load_graph_from_db
-
         import mcps.org_roam.db as db_module
+        from mcps.org_roam.tools_advanced import _load_graph_from_db
 
         original_detect = db_module.detect_db
 
@@ -290,9 +286,8 @@ class TestConnectedComponents:
 
     def test_connected_components_count(self, test_db):
         """Test that connected components are detected correctly."""
-        from mcps.org_roam.tools_advanced import _load_graph_from_db
-
         import mcps.org_roam.db as db_module
+        from mcps.org_roam.tools_advanced import _load_graph_from_db
 
         original_detect = db_module.detect_db
 
@@ -316,9 +311,8 @@ class TestClusteringCoefficient:
 
     def test_clustering_coefficient_exists(self, test_db):
         """Test that clustering coefficients are computed."""
-        from mcps.org_roam.tools_advanced import _load_graph_from_db
-
         import mcps.org_roam.db as db_module
+        from mcps.org_roam.tools_advanced import _load_graph_from_db
 
         original_detect = db_module.detect_db
 
@@ -346,9 +340,8 @@ class TestGraphStats:
 
     def test_graph_density(self, test_db):
         """Test that graph density is calculated correctly."""
-        from mcps.org_roam.tools_advanced import _load_graph_from_db
-
         import mcps.org_roam.db as db_module
+        from mcps.org_roam.tools_advanced import _load_graph_from_db
 
         original_detect = db_module.detect_db
 

@@ -4,8 +4,9 @@ Provides sophisticated graph algorithms including PageRank, community detection,
 centrality measures, and link prediction using networkx.
 """
 
-import networkx as nx
 from mcp.server.fastmcp import FastMCP
+import networkx as nx
+
 from . import db
 from . import queries
 
@@ -15,6 +16,7 @@ def _load_graph_from_db():
 
     Returns:
         nx.DiGraph: Directed graph with nodes and edges from org-roam database.
+
     """
     G = nx.DiGraph()
 
@@ -60,6 +62,7 @@ def register(mcp: FastMCP) -> None:
 
         Returns:
             List of dicts with title, id, and pagerank score (0-1).
+
         """
         G, node_by_id = _load_graph_from_db()
 
@@ -96,6 +99,7 @@ def register(mcp: FastMCP) -> None:
 
         Returns:
             Dict with communities list and summary statistics.
+
         """
         G, node_by_id = _load_graph_from_db()
 
@@ -154,6 +158,7 @@ def register(mcp: FastMCP) -> None:
 
         Returns:
             List of dicts with title, id, and betweenness score.
+
         """
         G, node_by_id = _load_graph_from_db()
 
@@ -188,6 +193,7 @@ def register(mcp: FastMCP) -> None:
 
         Returns:
             List of dicts with title, id, and closeness score.
+
         """
         G, node_by_id = _load_graph_from_db()
 
@@ -222,6 +228,7 @@ def register(mcp: FastMCP) -> None:
 
         Returns:
             Dict with clustering coefficient and interpretation.
+
         """
         G, node_by_id = _load_graph_from_db()
 
@@ -271,6 +278,7 @@ def register(mcp: FastMCP) -> None:
 
         Returns:
             Dict with node count, edge count, density, diameter, and other metrics.
+
         """
         G, node_by_id = _load_graph_from_db()
 
@@ -348,6 +356,7 @@ def register(mcp: FastMCP) -> None:
 
         Returns:
             List of suggested (title, id, score) for unlinked nodes.
+
         """
         G, node_by_id = _load_graph_from_db()
 
@@ -400,6 +409,7 @@ def register(mcp: FastMCP) -> None:
 
         Returns:
             Dict with component information and node assignments.
+
         """
         G, node_by_id = _load_graph_from_db()
 
@@ -453,7 +463,7 @@ def register(mcp: FastMCP) -> None:
             "num_components": len(components),
             "components": result_components,
             "interpretation": (
-                f"Graph is fully connected (1 component)."
+                "Graph is fully connected (1 component)."
                 if len(components) == 1
                 else f"Graph has {len(components)} separate components. "
                 f"Largest component has {components[0].__len__()} nodes. "

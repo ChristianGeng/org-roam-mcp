@@ -20,6 +20,7 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             search: Title fragment to search for (case-insensitive)
+
         """
         return query(queries.FIND, (search,))
 
@@ -29,6 +30,7 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             node_id: UUID of the target node
+
         """
         return query(queries.BACKLINKS, (quote_param(node_id),))
 
@@ -41,6 +43,7 @@ def register(mcp: FastMCP) -> None:
         Args:
             node_id: UUID of the starting node
             depth: Maximum traversal depth (default 2)
+
         """
         qid = quote_param(node_id)
         return query(queries.BFS, (qid, qid, depth, qid))
@@ -54,6 +57,7 @@ def register(mcp: FastMCP) -> None:
         Args:
             start_id: UUID of the start node
             end_id: UUID of the end node
+
         """
         qs = quote_param(start_id)
         qe = quote_param(end_id)
@@ -82,6 +86,7 @@ def register(mcp: FastMCP) -> None:
         Args:
             node_a: UUID of the first node
             node_b: UUID of the second node
+
         """
         qa = quote_param(node_a)
         qb = quote_param(node_b)
@@ -93,6 +98,7 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             limit: Number of top nodes to return (default 20)
+
         """
         return query(queries.CENTRAL, (limit,))
 
@@ -107,6 +113,7 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             node_id: UUID of the node to read
+
         """
         rows = query("SELECT file FROM nodes WHERE id = ?", (quote_param(node_id),))
         if not rows:

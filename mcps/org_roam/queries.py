@@ -70,7 +70,7 @@ RESOLVE_TITLE = """
 SELECT title FROM nodes WHERE id = ?
 """
 
-COMMON_NEIGHBORS = f"""
+COMMON_NEIGHBORS = """
 SELECT n.title, n.id, COUNT(*) AS shared_links
 FROM links l1
 JOIN links l2 ON l1.dest = l2.dest
@@ -85,7 +85,7 @@ ORDER BY shared_links DESC
 LIMIT 15
 """
 
-CENTRAL = f"""
+CENTRAL = """
 SELECT n.title,
        n.id,
        COUNT(DISTINCT lo.dest) AS out_links,
@@ -99,7 +99,7 @@ ORDER BY total DESC
 LIMIT ?
 """
 
-ORPHANS = f"""
+ORPHANS = """
 SELECT n.title, n.id, n.file
 FROM nodes n
 WHERE n.id NOT IN (SELECT DISTINCT source FROM links WHERE type = '"id"')
