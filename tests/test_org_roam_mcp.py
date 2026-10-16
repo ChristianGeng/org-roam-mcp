@@ -108,6 +108,13 @@ class TestDbDetectionHelpers:
         output = '"/home/user/doom-emacs/.local/cache/org-roam.db"\n'
         assert db_module._extract_db_path(output) == "/home/user/doom-emacs/.local/cache/org-roam.db"
 
+    def test_emacs_query_returns_the_path_without_printing(self):
+        """Return the path as the value; princ fails in a read-only buffer."""
+        import org_roam_mcp.db as db_module
+
+        assert "princ" not in db_module.EMACS_DB_LOCATION_EVAL
+        assert "(expand-file-name loc)" in db_module.EMACS_DB_LOCATION_EVAL
+
     def test_extract_db_path_ignores_nil(self):
         """Ignore nil output from emacsclient."""
         import org_roam_mcp.db as db_module

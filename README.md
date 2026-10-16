@@ -106,9 +106,9 @@ and other clients take the same command:
 
 The server uses the first of:
 
-1. the `ORG_ROAM_DB` environment variable;
-2. `org-roam-db-location` from the running Emacs (`emacsclient`);
-3. `~/emacs-conf/org-roam.db`, `~/doom-emacs/.local/cache/org-roam.db`,
+1. `org-roam-db-location` from the running Emacs (`emacsclient`);
+2. the `ORG_ROAM_DB` environment variable;
+3. `~/doom-emacs/.local/cache/org-roam.db`, `~/emacs-conf/org-roam.db`,
    `~/.emacs.d/org-roam.db`, `~/.emacs.d/.local/cache/org-roam.db`,
    `~/.config/emacs/org-roam.db`, `~/.local/share/emacs/org-roam.db`.
 
