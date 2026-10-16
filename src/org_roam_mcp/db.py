@@ -7,6 +7,9 @@ import subprocess
 
 
 REQUIRED_TABLES = {"files", "nodes"}
+# The path is the expression's value, which emacsclient prints. `princ'
+# would write into the server's current buffer, and fails when that buffer
+# is read-only (for example *Process List*).
 EMACS_DB_LOCATION_EVAL = (
     "(progn "
     "(require 'org-roam nil t) "
@@ -14,7 +17,7 @@ EMACS_DB_LOCATION_EVAL = (
     "((fboundp 'org-roam-db-location) (org-roam-db-location)) "
     "((boundp 'org-roam-db-location) org-roam-db-location) "
     "(t nil)))) "
-    "(when loc (princ loc))))"
+    "(when loc (expand-file-name loc))))"
 )
 
 
@@ -118,8 +121,8 @@ def detect_db() -> str:
 
     home = Path.home()
     candidates = [
-        home / "emacs-conf" / "org-roam.db",
         home / "doom-emacs" / ".local" / "cache" / "org-roam.db",
+        home / "emacs-conf" / "org-roam.db",
         home / ".emacs.d" / "org-roam.db",
         home / ".emacs.d" / ".local" / "cache" / "org-roam.db",
         home / ".config" / "emacs" / "org-roam.db",
@@ -129,9 +132,7 @@ def detect_db() -> str:
         if _is_valid_roam_db(loc):
             return str(loc)
 
-    raise FileNotFoundError(
-        "org-roam.db not found via Emacs server, ORG_ROAM_DB, or known locations."
-    )
+    raise FileNotFoundError("org-roam.db not found via Emacs server, ORG_ROAM_DB, or known locations.")
 
 
 def get_connection() -> sqlite3.Connection:
@@ -167,9 +168,6 @@ def query(sql: str, params: tuple = ()) -> list[dict]:
     try:
         cursor = conn.execute(sql, params)
         columns = [desc[0] for desc in cursor.description] if cursor.description else []
-        return [
-            {col: _strip_elisp_quotes(val) for col, val in zip(columns, row)}
-            for row in cursor.fetchall()
-        ]
+        return [{col: _strip_elisp_quotes(val) for col, val in zip(columns, row)} for row in cursor.fetchall()]
     finally:
         conn.close()
