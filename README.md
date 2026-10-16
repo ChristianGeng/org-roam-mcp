@@ -44,10 +44,11 @@ Worked examples: [docs/examples.md](docs/examples.md).
 
 ## Install
 
-Needs Python 3.10+ and [uv](https://docs.astral.sh/uv/).
+Needs Python 3.10+ and [uv](https://docs.astral.sh/uv/). The repo is public,
+so cloning needs no GitHub credentials.
 
 ```bash
-git clone git@github.com:ChristianGeng/org-roam-mcp.git ~/work/myfiles/org-roam-mcp
+git clone https://github.com/ChristianGeng/org-roam-mcp.git ~/work/myfiles/org-roam-mcp
 uv sync --no-config --directory ~/work/myfiles/org-roam-mcp
 ```
 
@@ -63,11 +64,11 @@ which may be unreachable (for example off VPN). After the first `uv sync`
 the server starts offline.
 
 Without a clone, uv can also fetch and run it. This needs network on first
-use, and GitHub access over SSH while the repo is private:
+use:
 
 ```bash
 claude mcp add --scope user org-roam -- \
-  uvx --no-config --from git+ssh://git@github.com/ChristianGeng/org-roam-mcp.git org-roam-mcp
+  uvx --no-config --from git+https://github.com/ChristianGeng/org-roam-mcp org-roam-mcp
 ```
 
 ## Update
