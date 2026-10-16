@@ -47,8 +47,8 @@ Worked examples: [docs/examples.md](docs/examples.md).
 Needs Python 3.10+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/ChristianGeng/org-roam-mcp ~/work/myfiles/org-roam-mcp
-uv sync --directory ~/work/myfiles/org-roam-mcp
+git clone git@github.com:ChristianGeng/org-roam-mcp.git ~/work/myfiles/org-roam-mcp
+uv sync --no-config --directory ~/work/myfiles/org-roam-mcp
 ```
 
 ## Register with Claude Code
@@ -62,12 +62,23 @@ claude mcp add --scope user org-roam -- \
 which may be unreachable (for example off VPN). After the first `uv sync`
 the server starts offline.
 
-Without a clone, uv can also fetch and run it (needs network on first use):
+Without a clone, uv can also fetch and run it. This needs network on first
+use, and GitHub access over SSH while the repo is private:
 
 ```bash
 claude mcp add --scope user org-roam -- \
-  uvx --from git+https://github.com/ChristianGeng/org-roam-mcp org-roam-mcp
+  uvx --no-config --from git+ssh://git@github.com/ChristianGeng/org-roam-mcp.git org-roam-mcp
 ```
+
+## Update
+
+```bash
+git -C ~/work/myfiles/org-roam-mcp pull
+uv sync --no-config --directory ~/work/myfiles/org-roam-mcp
+```
+
+Then restart the client (in Claude Code, `/mcp` and reconnect). With `uvx`,
+add `--refresh` once to fetch the new version.
 
 Check with `claude mcp list`; then in a session ask for
 `org_roam_find("some title")`.
