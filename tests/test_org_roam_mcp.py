@@ -103,20 +103,20 @@ class TestDbDetectionHelpers:
 
     def test_extract_db_path_handles_quoted_output(self):
         """Extract DB path from quoted emacsclient output."""
-        import mcps.org_roam.db as db_module
+        import org_roam_mcp.db as db_module
 
         output = '"/home/user/doom-emacs/.local/cache/org-roam.db"\n'
         assert db_module._extract_db_path(output) == "/home/user/doom-emacs/.local/cache/org-roam.db"
 
     def test_extract_db_path_ignores_nil(self):
         """Ignore nil output from emacsclient."""
-        import mcps.org_roam.db as db_module
+        import org_roam_mcp.db as db_module
 
         assert db_module._extract_db_path("nil\n") is None
 
     def test_is_valid_roam_db_requires_nodes_and_files(self, tmp_path):
         """Validate DB only when required tables are present."""
-        import mcps.org_roam.db as db_module
+        import org_roam_mcp.db as db_module
 
         valid_db = tmp_path / "valid.db"
         _create_valid_roam_db(valid_db)
@@ -135,7 +135,7 @@ class TestDbDetectionOrder:
 
     def test_detect_db_prefers_server_over_env(self, monkeypatch, tmp_path):
         """Prefer server-detected DB over environment variable DB."""
-        import mcps.org_roam.db as db_module
+        import org_roam_mcp.db as db_module
 
         server_db = tmp_path / "server.db"
         env_db = tmp_path / "env.db"
@@ -153,7 +153,7 @@ class TestDbDetectionOrder:
 
     def test_detect_db_uses_env_when_server_unavailable(self, monkeypatch, tmp_path):
         """Use environment variable when server detection fails."""
-        import mcps.org_roam.db as db_module
+        import org_roam_mcp.db as db_module
 
         env_db = tmp_path / "env.db"
         _create_valid_roam_db(env_db)
@@ -174,8 +174,8 @@ class TestGraphLoading:
     def test_load_graph_basic(self, test_db):
         """Test that graph loads with correct node and edge counts."""
         # Monkey-patch db module to use test database
-        import mcps.org_roam.db as db_module
-        from mcps.org_roam.tools_advanced import _load_graph_from_db
+        import org_roam_mcp.db as db_module
+        from org_roam_mcp.tools_advanced import _load_graph_from_db
 
         original_detect = db_module.detect_db
 
@@ -198,8 +198,8 @@ class TestGraphLoading:
 
     def test_orphaned_node_detection(self, test_db):
         """Test that orphaned nodes have zero in-degree and out-degree."""
-        import mcps.org_roam.db as db_module
-        from mcps.org_roam.tools_advanced import _load_graph_from_db
+        import org_roam_mcp.db as db_module
+        from org_roam_mcp.tools_advanced import _load_graph_from_db
 
         original_detect = db_module.detect_db
 
@@ -226,8 +226,8 @@ class TestPageRank:
 
     def test_pagerank_scores_exist(self, test_db):
         """Test that PageRank produces scores for all nodes."""
-        import mcps.org_roam.db as db_module
-        from mcps.org_roam.tools_advanced import _load_graph_from_db
+        import org_roam_mcp.db as db_module
+        from org_roam_mcp.tools_advanced import _load_graph_from_db
 
         original_detect = db_module.detect_db
 
@@ -258,8 +258,8 @@ class TestCentrality:
 
     def test_betweenness_identifies_bridges(self, test_db):
         """Test that betweenness centrality is computed for all nodes."""
-        import mcps.org_roam.db as db_module
-        from mcps.org_roam.tools_advanced import _load_graph_from_db
+        import org_roam_mcp.db as db_module
+        from org_roam_mcp.tools_advanced import _load_graph_from_db
 
         original_detect = db_module.detect_db
 
@@ -286,8 +286,8 @@ class TestConnectedComponents:
 
     def test_connected_components_count(self, test_db):
         """Test that connected components are detected correctly."""
-        import mcps.org_roam.db as db_module
-        from mcps.org_roam.tools_advanced import _load_graph_from_db
+        import org_roam_mcp.db as db_module
+        from org_roam_mcp.tools_advanced import _load_graph_from_db
 
         original_detect = db_module.detect_db
 
@@ -311,8 +311,8 @@ class TestClusteringCoefficient:
 
     def test_clustering_coefficient_exists(self, test_db):
         """Test that clustering coefficients are computed."""
-        import mcps.org_roam.db as db_module
-        from mcps.org_roam.tools_advanced import _load_graph_from_db
+        import org_roam_mcp.db as db_module
+        from org_roam_mcp.tools_advanced import _load_graph_from_db
 
         original_detect = db_module.detect_db
 
@@ -340,8 +340,8 @@ class TestGraphStats:
 
     def test_graph_density(self, test_db):
         """Test that graph density is calculated correctly."""
-        import mcps.org_roam.db as db_module
-        from mcps.org_roam.tools_advanced import _load_graph_from_db
+        import org_roam_mcp.db as db_module
+        from org_roam_mcp.tools_advanced import _load_graph_from_db
 
         original_detect = db_module.detect_db
 

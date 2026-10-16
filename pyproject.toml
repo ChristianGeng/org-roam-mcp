@@ -1,0 +1,55 @@
+[project]
+name = "org-roam-mcp"
+version = "0.1.0"
+description = "MCP server for an org-roam knowledge graph"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "cgeng"},
+]
+dependencies = [
+    # mcp 2 renamed FastMCP to MCPServer; port before lifting this.
+    "mcp>=1.0.0,<2",
+    "networkx>=3.0",
+    "python-louvain>=0.16",
+    "scipy>=1.10",
+]
+
+[project.scripts]
+org-roam-mcp = "org_roam_mcp.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0.0",
+    "ruff>=0.1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+cache-dir = ".cache/ruff"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["D", "E", "F", "I", "N", "W"]
+# D203/D213 are the halves of two incompatible pairs that ruff resolves by
+# ignoring them anyway; naming them here silences the warning on every run.
+extend-ignore = ["D100", "D101", "D102", "D103", "D104", "D107", "D203", "D213"]
+
+[tool.ruff.lint.per-file-ignores]
+# "G" is the conventional NetworkX name for a graph; lowercasing it would be
+# less readable than the rule it satisfies.
+"src/org_roam_mcp/tools_advanced.py" = ["N806"]
+"tests/test_org_roam_mcp.py" = ["N806"]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+force-sort-within-sections = true
+lines-after-imports = 2
+
+[tool.pytest.ini_options]
+cache_dir = ".cache/pytest"
+testpaths = ["tests"]
