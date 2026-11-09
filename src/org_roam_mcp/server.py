@@ -25,9 +25,10 @@ hand."""
 
 EPILOG = """\
 How the database is found, in this order:
-  1. A running Emacs is asked for org-roam-db-location through emacsclient.
-     emacsclient reads EMACS_SOCKET_NAME and EMACS_SERVER_FILE itself, so a
-     server with another name, or a TCP server, is found when one is set.
+  1. A running Emacs is asked for org-roam-db-location through emacsclient:
+     the default server (or the TCP server in EMACS_SERVER_FILE), then the
+     server named by EMACS_SOCKET_NAME (passed as --socket-name), then the
+     default sockets.
   2. ORG_ROAM_DB, if set.
   3. The standard places, for vanilla Emacs and Doom:
      ~/.emacs.d/org-roam.db
@@ -37,7 +38,7 @@ How the database is found, in this order:
 
 Environment variables:
   ORG_ROAM_DB        full path of org-roam.db
-  EMACS_SOCKET_NAME  name or path of the Emacs server socket (read by emacsclient)
+  EMACS_SOCKET_NAME  name or path of an Emacs server socket (passed as --socket-name)
   EMACS_SERVER_FILE  server file of a TCP Emacs server (read by emacsclient)
   XDG_CONFIG_HOME    base of the second Emacs folder (default ~/.config)"""
 

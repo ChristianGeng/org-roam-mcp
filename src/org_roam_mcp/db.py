@@ -4,9 +4,15 @@ import os
 from pathlib import Path
 import sqlite3
 import subprocess
+import time
 
 
 REQUIRED_TABLES = {"files", "nodes"}
+# How long a found database is used without looking again. Each query asks
+# for the database; without this, an Emacs that does not answer would cost
+# up to five seconds per server on every query.
+CACHE_SECONDS = 60.0
+_cached: tuple[float, str] | None = None
 # The path is the expression's value, which emacsclient prints. `princ'
 # would write into the server's current buffer, and fails when that buffer
 # is read-only (for example *Process List*).
@@ -63,10 +69,12 @@ def _is_valid_roam_db(db_path: Path) -> bool:
 def _server_file_candidates() -> list[str]:
     """Return likely Emacs server socket locations for the current user.
 
-    These are the sockets of the default server name. A server with another
-    name, or a TCP server, is reached by the plain emacsclient call when
-    EMACS_SOCKET_NAME or EMACS_SERVER_FILE is set, because emacsclient reads
-    those variables itself.
+    These are the sockets of the default server name. A TCP server is reached
+    by the plain emacsclient call when EMACS_SERVER_FILE is set, because
+    emacsclient reads that variable itself. A server with another name is
+    asked with --socket-name when EMACS_SOCKET_NAME is set (see
+    _server_targets), because emacsclient reads that variable itself only
+    from Emacs 27 on.
     """
     uid = os.getuid()
     return [
@@ -97,11 +105,27 @@ def fallback_locations() -> list[Path]:
     return places
 
 
-def _detect_db_from_server(server_file: str | None = None) -> str | None:
+def _server_targets() -> list[tuple[str | None, str | None]]:
+    """Return the Emacs servers to ask, as (server_file, socket_name), in order.
+
+    First the default server, then the one named by EMACS_SOCKET_NAME (passed
+    explicitly, so it also works with Emacs 26), then the default sockets.
+    """
+    targets: list[tuple[str | None, str | None]] = [(None, None)]
+    socket_name = os.environ.get("EMACS_SOCKET_NAME")
+    if socket_name:
+        targets.append((None, socket_name))
+    targets.extend((server_file, None) for server_file in _server_file_candidates())
+    return targets
+
+
+def _detect_db_from_server(server_file: str | None = None, socket_name: str | None = None) -> str | None:
     """Try to detect org-roam DB path via emacsclient against a server."""
     command = ["emacsclient"]
     if server_file:
         command.extend(["--server-file", server_file])
+    if socket_name:
+        command.extend(["--socket-name", socket_name])
     command.extend(["--eval", EMACS_DB_LOCATION_EVAL])
 
     try:
@@ -128,14 +152,32 @@ def _detect_db_from_server(server_file: str | None = None) -> str | None:
     return None
 
 
-def _server_label(server_file: str | None) -> str:
+def _server_label(server_file: str | None, socket_name: str | None = None) -> str:
     """Describe one Emacs server attempt for the error message."""
+    if socket_name:
+        return f"Emacs server named by EMACS_SOCKET_NAME={socket_name} (emacsclient --socket-name)"
     if server_file is None:
-        return "Emacs server through emacsclient (default name, or EMACS_SOCKET_NAME / EMACS_SERVER_FILE if set)"
+        return "Emacs server through emacsclient (default name, or EMACS_SERVER_FILE if set)"
     return f"Emacs server at {server_file}"
 
 
 def detect_db() -> str:
+    """Return the org-roam database, found by _find_db and kept for CACHE_SECONDS.
+
+    A kept path is used only while it is still an org-roam database; after
+    CACHE_SECONDS, or when the file is gone, the lookup runs again.
+    """
+    global _cached
+    if _cached is not None:
+        found_at, path = _cached
+        if time.monotonic() - found_at < CACHE_SECONDS and _is_valid_roam_db(Path(path)):
+            return path
+    path = _find_db()
+    _cached = (time.monotonic(), path)
+    return path
+
+
+def _find_db() -> str:
     """Locate the org-roam SQLite database.
 
     Detection order:
@@ -147,11 +189,11 @@ def detect_db() -> str:
     usable org-roam database.
     """
     tried = []
-    for server_file in [None, *_server_file_candidates()]:
-        server_db = _detect_db_from_server(server_file)
+    for server_file, socket_name in _server_targets():
+        server_db = _detect_db_from_server(server_file, socket_name)
         if server_db:
             return server_db
-        tried.append(_server_label(server_file))
+        tried.append(_server_label(server_file, socket_name))
 
     env_db = os.environ.get("ORG_ROAM_DB")
     if env_db:

@@ -18,6 +18,15 @@ def _create_valid_roam_db(db_path: Path) -> None:
     conn.close()
 
 
+@pytest.fixture(autouse=True)
+def fresh_lookup(monkeypatch):
+    """Start every test without a kept database and without EMACS_SOCKET_NAME."""
+    import org_roam_mcp.db as db_module
+
+    monkeypatch.setattr(db_module, "_cached", None)
+    monkeypatch.delenv("EMACS_SOCKET_NAME", raising=False)
+
+
 @pytest.fixture
 def test_db():
     """Create a temporary test database with sample org-roam structure."""
@@ -153,7 +162,7 @@ class TestDbDetectionOrder:
         monkeypatch.setattr(
             db_module,
             "_detect_db_from_server",
-            lambda _server_file=None: str(server_db),
+            lambda *_args, **_kwargs: str(server_db),
         )
 
         assert db_module.detect_db() == str(server_db)
@@ -169,7 +178,7 @@ class TestDbDetectionOrder:
         monkeypatch.setattr(
             db_module,
             "_detect_db_from_server",
-            lambda _server_file=None: None,
+            lambda *_args, **_kwargs: None,
         )
 
         assert db_module.detect_db() == str(env_db)
@@ -185,7 +194,7 @@ def no_emacs_home(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.delenv("ORG_ROAM_DB", raising=False)
-    monkeypatch.setattr(db_module, "_detect_db_from_server", lambda _server_file=None: None)
+    monkeypatch.setattr(db_module, "_detect_db_from_server", lambda *_args, **_kwargs: None)
     return home
 
 
@@ -274,6 +283,104 @@ class TestFallbackLocations:
         with pytest.raises(FileNotFoundError) as excinfo:
             db_module.detect_db()
         assert f"ORG_ROAM_DB={wrong} (not an org-roam database)" in str(excinfo.value)
+
+
+class TestEmacsSocketName:
+    """EMACS_SOCKET_NAME is passed to emacsclient explicitly (Emacs 26 does not read it)."""
+
+    def test_socket_name_is_asked_after_the_default_server(self, monkeypatch):
+        """The named server is the second target, before the default sockets."""
+        import org_roam_mcp.db as db_module
+
+        monkeypatch.setenv("EMACS_SOCKET_NAME", "work")
+        targets = db_module._server_targets()
+        assert targets[0] == (None, None)
+        assert targets[1] == (None, "work")
+        assert all(socket is None for _, socket in targets[2:])
+
+    def test_socket_name_becomes_the_socket_name_option(self, monkeypatch, tmp_path):
+        """The emacsclient command gets --socket-name with the value of EMACS_SOCKET_NAME."""
+        import subprocess
+
+        import org_roam_mcp.db as db_module
+
+        db_path = tmp_path / "named.db"
+        _create_valid_roam_db(db_path)
+        commands = []
+
+        def fake_run(command, **_kwargs):
+            commands.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout=f'"{db_path}"\n', stderr="")
+
+        monkeypatch.setattr(db_module.subprocess, "run", fake_run)
+        assert db_module._detect_db_from_server(None, "work") == str(db_path)
+        assert commands[0][:3] == ["emacsclient", "--socket-name", "work"]
+
+    def test_without_the_variable_there_is_no_named_target(self):
+        """No EMACS_SOCKET_NAME, no extra server to ask."""
+        import org_roam_mcp.db as db_module
+
+        assert all(socket is None for _, socket in db_module._server_targets())
+
+    def test_error_names_the_socket_name(self, no_emacs_home, monkeypatch):
+        """The error lists the named server among the places tried."""
+        import org_roam_mcp.db as db_module
+
+        monkeypatch.setenv("EMACS_SOCKET_NAME", "work")
+        with pytest.raises(FileNotFoundError) as excinfo:
+            db_module.detect_db()
+        assert "EMACS_SOCKET_NAME=work" in str(excinfo.value)
+
+
+class TestKeptDatabase:
+    """A found database is kept for CACHE_SECONDS, so a silent Emacs is not asked on every query."""
+
+    def test_second_lookup_does_not_ask_emacs_again(self, no_emacs_home, monkeypatch, tmp_path):
+        """Within CACHE_SECONDS the kept path is returned without a new lookup."""
+        import org_roam_mcp.db as db_module
+
+        env_db = tmp_path / "kept.db"
+        _create_valid_roam_db(env_db)
+        monkeypatch.setenv("ORG_ROAM_DB", str(env_db))
+        asked = []
+        monkeypatch.setattr(db_module, "_detect_db_from_server", lambda *args, **_kwargs: asked.append(args))
+
+        assert db_module.detect_db() == str(env_db)
+        first = len(asked)
+        assert db_module.detect_db() == str(env_db)
+        assert len(asked) == first
+
+    def test_lookup_runs_again_after_cache_seconds(self, no_emacs_home, monkeypatch, tmp_path):
+        """After CACHE_SECONDS the database is looked for again."""
+        import org_roam_mcp.db as db_module
+
+        env_db = tmp_path / "kept.db"
+        _create_valid_roam_db(env_db)
+        monkeypatch.setenv("ORG_ROAM_DB", str(env_db))
+        clock = [1000.0]
+        monkeypatch.setattr(db_module.time, "monotonic", lambda: clock[0])
+        db_module.detect_db()
+
+        other = tmp_path / "other.db"
+        _create_valid_roam_db(other)
+        monkeypatch.setenv("ORG_ROAM_DB", str(other))
+        clock[0] += db_module.CACHE_SECONDS - 1
+        assert db_module.detect_db() == str(env_db)
+        clock[0] += 2
+        assert db_module.detect_db() == str(other)
+
+    def test_a_deleted_database_is_looked_for_again(self, no_emacs_home, monkeypatch, tmp_path):
+        """A kept path that is no longer a database is not used."""
+        import org_roam_mcp.db as db_module
+
+        env_db = tmp_path / "kept.db"
+        _create_valid_roam_db(env_db)
+        monkeypatch.setenv("ORG_ROAM_DB", str(env_db))
+        db_module.detect_db()
+
+        env_db.unlink()
+        with pytest.raises(FileNotFoundError):
+            db_module.detect_db()
 
 
 class TestCommandLine:

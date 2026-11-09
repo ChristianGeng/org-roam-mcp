@@ -175,9 +175,10 @@ with org-roam's `files` and `nodes` tables):
 
 1. **A running Emacs.** The server asks it for `org-roam-db-location`
    through `emacsclient`: first the default server (`emacsclient` itself
-   reads `EMACS_SOCKET_NAME` and `EMACS_SERVER_FILE`), then the default
-   sockets `/run/user/<uid>/emacs/server` and `/tmp/emacs<uid>/server`.
-   Emacs needs `(server-start)` and org-roam loaded.
+   reads `EMACS_SERVER_FILE`), then the server named by
+   `EMACS_SOCKET_NAME` if it is set, then the default sockets
+   `/run/user/<uid>/emacs/server` and `/tmp/emacs<uid>/server`. Emacs
+   needs `(server-start)` and org-roam loaded.
 2. **`ORG_ROAM_DB`,** the full path of `org-roam.db`.
 3. **The standard places** of vanilla Emacs and Doom Emacs:
    - `~/.emacs.d/org-roam.db`
@@ -195,13 +196,17 @@ claude mcp add --scope user org-roam -e ORG_ROAM_DB="$HOME/path/to/org-roam.db" 
   uvx --no-config --from git+https://github.com/ChristianGeng/org-roam-mcp org-roam-mcp
 ```
 
-**An Emacs server with another name** (`server-name`), or a TCP server
-(`server-use-tcp`), is found when `EMACS_SOCKET_NAME` (or
-`EMACS_SERVER_FILE`) is set for the MCP server, the same way you set it for
-`emacsclient`. Otherwise use `ORG_ROAM_DB`.
+**An Emacs server with another name** (`server-name`) is found when
+`EMACS_SOCKET_NAME` is set for the MCP server: the server passes it to
+`emacsclient` as `--socket-name`, so this works with any Emacs version
+(`emacsclient` reads the variable itself only from Emacs 27 on). **A TCP
+server** (`server-use-tcp`) is found when `EMACS_SERVER_FILE` is set.
+Otherwise use `ORG_ROAM_DB`.
 
 If nothing is found, the error lists every place that was tried, in this
-order, and says how to fix it.
+order, and says how to fix it. A database that was found is used for 60
+seconds without looking again, so an Emacs that does not answer does not
+slow down every query.
 
 ## Development
 
