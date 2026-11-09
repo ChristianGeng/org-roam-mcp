@@ -116,7 +116,7 @@ class TestCheckSvg:
             '  <rect x="0" y="0" width="400" height="200" fill="#f8fafc"/>\n  <text x="20" y="40">A: 3</text>',
             '  <text x="20" y="40">A: 3</text>\n  <rect x="0" y="0" width="400" height="200" fill="#f8fafc"/>',
         )
-        assert any("drawn after text" in p for p in check_svg.check(late))
+        assert any("drawn after <text>" in p for p in check_svg.check(late))
 
     def test_missing_desc(self):
         """<desc> with the message and the numbers is required, like <title>."""
@@ -134,6 +134,40 @@ class TestCheckSvg:
             '<defs><linearGradient id="g"/></defs><rect x="0" y="0" width="10" height="10" fill="url(#g)"/></svg>',
         )
         assert check_svg.check(local) == []
+
+    def test_numbers_in_scientific_and_leading_decimal_form(self):
+        """Numbers in viewBox and lengths, like "4e2" and ".5", are valid SVG numbers."""
+        sci = GOOD.replace('viewBox="0 0 400 200"', 'viewBox="0 0 4e2 2E2"').replace(
+            'width="400" height="200" fill', 'width="4.0e2" height="200.0" fill'
+        )
+        assert check_svg.check(sci) == []
+        leading = GOOD.replace('<rect x="0" y="0"', '<rect x=".0" y="-.0"')
+        assert check_svg.check(leading) == []
+
+    def test_template_in_defs_does_not_count_as_painted(self):
+        """A <text> template in <defs> before the card is not painted there."""
+        templated = GOOD.replace(
+            "  <rect x=",
+            '  <defs><text id="label">A: 3</text></defs>\n  <rect x=',
+            1,
+        )
+        assert check_svg.check(templated) == []
+
+    def test_card_after_bars_is_reported(self):
+        """A card painted after shapes (not only text) hides them."""
+        late = GOOD.replace(
+            "  <rect x=",
+            '  <g><rect x="40" y="60" width="20" height="80" fill="#2f6f9f"/></g>\n  <rect x=',
+            1,
+        )
+        assert any("drawn after <rect>" in p for p in check_svg.check(late))
+
+    def test_escaped_css_cannot_hide_url_or_import(self):
+        """CSS escapes (hex for a letter, or a backslash before @) are decoded before the check."""
+        hex_escaped = GOOD.replace("</svg>", "<style>rect { fill: u\\72l(https://example.org/a.png); }</style></svg>")
+        assert any("https://example.org/a.png" in p for p in check_svg.check(hex_escaped))
+        char_escaped = GOOD.replace("</svg>", "<style>\\@import 'https://example.org/a.css';</style></svg>")
+        assert any("@import" in p for p in check_svg.check(char_escaped))
 
     def test_main_exit_status(self, tmp_path, capsys):
         """main() prints ok or the problems, and returns 0 or 1."""

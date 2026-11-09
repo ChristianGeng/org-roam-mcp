@@ -16,7 +16,12 @@ XLINK_HREF = "{http://www.w3.org/1999/xlink}href"
 MAX_WIDTH = 1200
 FORBIDDEN_TAGS = {"script", "foreignObject", "image"}
 # Elements that describe or style the picture but draw nothing.
-NOT_DRAWN = {"svg", "title", "desc", "style", "defs", "metadata"}
+NOT_DRAWN = {"svg", "title", "desc", "style", "defs", "metadata", "g", "a"}
+# Containers whose content is a template, painted only where it is used.
+TEMPLATES = {"defs", "symbol", "clipPath", "mask", "marker", "pattern", "linearGradient", "radialGradient", "filter"}
+NUMBER = r"-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
+CSS_ESCAPE_HEX = re.compile(r"\\([0-9a-fA-F]{1,6})[ \t\n\r\f]?")
+CSS_ESCAPE_CHAR = re.compile(r"\\(.)", re.DOTALL)
 URL_IN_CSS = re.compile(r"url\(\s*['\"]?([^)'\"]*)", re.IGNORECASE)
 CSS_LOADS = re.compile(r"@import|@font-face", re.IGNORECASE)
 
@@ -27,10 +32,10 @@ def _local(tag: str) -> str:
 
 
 def _number(value: str | None) -> float | None:
-    """Read a length such as "720", "-20" or "720px"; None if it is not one."""
+    """Read a length such as "720", "-20", ".5", "1e3" or "720px"; None if it is not one."""
     if value is None:
         return None
-    match = re.fullmatch(r"\s*(-?[0-9]+(?:\.[0-9]+)?)\s*(?:px)?\s*", value)
+    match = re.fullmatch(rf"\s*({NUMBER})\s*(?:px)?\s*", value)
     return float(match.group(1)) if match else None
 
 
@@ -39,7 +44,7 @@ def _view_box(root: ET.Element) -> tuple[float, float, float, float] | None:
     view_box = root.get("viewBox")
     if not view_box:
         return None
-    parts = [_number(part) for part in view_box.replace(",", " ").split()]
+    parts = [float(part) for part in re.findall(NUMBER, view_box)]
     if len(parts) != 4 or any(part is None for part in parts):
         return None
     return tuple(parts)
@@ -61,9 +66,40 @@ def _covers_picture(rect: ET.Element, view_box: tuple[float, float, float, float
     return x <= min_x and y <= min_y and x + w >= min_x + width and y + h >= min_y + height
 
 
+def _unescape_css(css: str) -> str:
+    """Decode CSS escapes (a hex escape for a letter, or a backslash before a character).
+
+    So an escape cannot hide a url( or an @import.
+    """
+    css = CSS_ESCAPE_HEX.sub(lambda m: chr(int(m.group(1), 16)) if int(m.group(1), 16) <= 0x10FFFF else "", css)
+    return CSS_ESCAPE_CHAR.sub(lambda m: m.group(1), css)
+
+
 def _outside_urls(css: str) -> list[str]:
     """Return the url(...) targets in CSS text that point outside the file."""
-    return [target for target in URL_IN_CSS.findall(css) if not target.strip().startswith("#")]
+    return [target for target in URL_IN_CSS.findall(_unescape_css(css)) if not target.strip().startswith("#")]
+
+
+def _painted(root: ET.Element) -> list[ET.Element]:
+    """Return the elements that paint something, in paint order.
+
+    Containers (g, a) and descriptions are left out, and so is everything
+    inside a template (defs, symbol, clipPath, ...), which is painted only
+    where it is used.
+    """
+    painted = []
+
+    def walk(el: ET.Element) -> None:
+        name = _local(el.tag)
+        if name in TEMPLATES:
+            return
+        if name not in NOT_DRAWN:
+            painted.append(el)
+        for child in el:
+            walk(child)
+
+    walk(root)
+    return painted
 
 
 def check(svg_text: str) -> list[str]:
@@ -99,7 +135,7 @@ def check(svg_text: str) -> list[str]:
             if href and not href.startswith("#"):
                 problems.append(f"external reference {href!r} in <{name}>")
         if name == "style" and el.text:
-            if CSS_LOADS.search(el.text):
+            if CSS_LOADS.search(_unescape_css(el.text)):
                 problems.append("the <style> loads something from outside (@import or @font-face)")
             for target in _outside_urls(el.text):
                 problems.append(f"the <style> loads url({target}) from outside the file")
@@ -114,13 +150,13 @@ def check(svg_text: str) -> list[str]:
     if "desc" not in tags:
         problems.append("no <desc> with the message and the numbers")
 
-    drawn = [el for el in elements if _local(el.tag) not in NOT_DRAWN]
-    card = next((i for i, el in enumerate(drawn) if _local(el.tag) == "rect" and _covers_picture(el, view_box)), None)
-    first_text = next((i for i, el in enumerate(drawn) if _local(el.tag) == "text"), None)
+    painted = _painted(root)
+    card = next((i for i, el in enumerate(painted) if _local(el.tag) == "rect" and _covers_picture(el, view_box)), None)
     if card is None:
         problems.append("no filled background card over the whole viewBox (needed for dark pages)")
-    elif first_text is not None and card > first_text:
-        problems.append("the background card is drawn after text and hides it; draw it first")
+    elif card > 0:
+        hidden = _local(painted[0].tag)
+        problems.append(f"the background card is drawn after <{hidden}> and hides it; draw the card first")
     return problems
 
 
