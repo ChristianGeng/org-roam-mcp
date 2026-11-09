@@ -3,8 +3,9 @@
 An MCP server that gives AI agents access to an
 [org-roam](https://www.orgroam.com/) knowledge graph.
 
-Reads query the org-roam SQLite database directly, so they work without
-Emacs. `org_roam_sync` and `emacs_eval` go through `emacsclient` and need a
+It needs no API key: the AI client brings the model. Reads query the
+org-roam SQLite database directly, so they work without Emacs.
+`org_roam_sync` and `emacs_eval` go through `emacsclient` and need a
 running Emacs server (`M-x server-start`).
 
 ```text
@@ -44,47 +45,110 @@ Worked examples: [docs/examples.md](docs/examples.md).
 
 ## Install
 
-Needs Python 3.10+ and [uv](https://docs.astral.sh/uv/). The repo is public,
-so cloning needs no GitHub credentials.
+Needs Python 3.10+ and [uv](https://docs.astral.sh/uv/). The repository is
+public, so no GitHub account is needed.
 
-```bash
-git clone https://github.com/ChristianGeng/org-roam-mcp.git ~/work/myfiles/org-roam-mcp
-uv sync --no-config --directory ~/work/myfiles/org-roam-mcp
-```
-
-## Register with Claude Code
-
-```bash
-claude mcp add --scope user org-roam -- \
-  uv run --no-config --directory ~/work/myfiles/org-roam-mcp org-roam-mcp
-```
-
-`--no-config` ignores custom package indexes from a surrounding uv config,
-which may be unreachable (for example off VPN). After the first `uv sync`
-the server starts offline.
-
-Without a clone, uv can also fetch and run it. This needs network on first
-use:
+The simplest way: let uv fetch and run it, and register it with Claude Code
+in one line.
 
 ```bash
 claude mcp add --scope user org-roam -- \
   uvx --no-config --from git+https://github.com/ChristianGeng/org-roam-mcp org-roam-mcp
 ```
 
-## Update
+This needs a network connection the first time. To use a release instead of
+the newest code, add the tag: `…/org-roam-mcp@v0.1.0`.
+
+Check that it installs and which version runs:
 
 ```bash
-git -C ~/work/myfiles/org-roam-mcp pull
-uv sync --no-config --directory ~/work/myfiles/org-roam-mcp
+uvx --no-config --from git+https://github.com/ChristianGeng/org-roam-mcp org-roam-mcp --version
+uvx --no-config --from git+https://github.com/ChristianGeng/org-roam-mcp org-roam-mcp --help
 ```
 
-Then restart the client (in Claude Code, `/mcp` and reconnect). With `uvx`,
-add `--refresh` once to fetch the new version.
+`--help` also explains how the database is found. Without arguments the
+command starts the server, which then waits for an MCP client on standard
+input; that is what Claude Code does, so it is not run by hand.
+
+`--no-config` ignores custom package indexes from a surrounding uv config,
+which may be unreachable (for example off a company VPN).
+
+### From a local clone
+
+A clone starts offline after the first `uv sync`. Any folder works, for
+example `~/src/org-roam-mcp`:
+
+```bash
+git clone https://github.com/ChristianGeng/org-roam-mcp.git ~/src/org-roam-mcp
+uv sync --no-config --directory ~/src/org-roam-mcp
+claude mcp add --scope user org-roam -- \
+  uv run --no-config --directory ~/src/org-roam-mcp org-roam-mcp
+```
+
+## Update
+
+With `uvx`, add `--refresh` once to fetch the new version. With a clone:
+
+```bash
+git -C ~/src/org-roam-mcp pull
+uv sync --no-config --directory ~/src/org-roam-mcp
+```
+
+Then restart the client (in Claude Code, `/mcp` and reconnect).
 
 Check with `claude mcp list`; then in a session ask for
 `org_roam_find("some title")`.
 
 ## Other clients
+
+The server uses no API keys and no model of its own. The client (Claude
+Code, OpenCode, an editor) brings the model and its key; the server only
+reads the local org-roam database and, for `org_roam_sync` and
+`emacs_eval`, talks to the local Emacs.
+
+### OpenCode
+
+Add the server as a local MCP server, either with OpenCode's command:
+
+```bash
+opencode mcp add org-roam -- \
+  uvx --no-config --from git+https://github.com/ChristianGeng/org-roam-mcp org-roam-mcp
+```
+
+or by hand in OpenCode's config: `opencode.json` (or `opencode.jsonc`) in a
+project, or `~/.config/opencode/opencode.json` for every project. With
+OpenCode's current config format (V2), local servers go under
+`mcp.servers`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "org-roam": {
+        "type": "local",
+        "command": ["uvx", "--no-config", "--from",
+                    "git+https://github.com/ChristianGeng/org-roam-mcp",
+                    "org-roam-mcp"],
+        "environment": {
+          "ORG_ROAM_DB": "/home/you/.config/emacs/.local/cache/org-roam.db"
+        }
+      }
+    }
+  }
+}
+```
+
+`environment` is only needed when Emacs is not running and the database is
+not in a standard place (see [Finding the database](#finding-the-database));
+otherwise leave it out. With the command, pass it as
+`opencode mcp add org-roam --env ORG_ROAM_DB=… -- uvx …`. The older V1
+format puts `"org-roam"` directly under `"mcp"` (with `"enabled": true`
+instead of `"disabled"`); OpenCode still reads it. See OpenCode's
+[MCP servers](https://opencode.ai/docs/mcp-servers/) and
+[config](https://opencode.ai/docs/config/) pages.
+
+### VS Code, Windsurf and others
 
 VS Code (`.vscode/mcp.json`), Windsurf (`~/.codeium/windsurf/mcp_config.json`)
 and other clients take the same command:
@@ -93,9 +157,10 @@ and other clients take the same command:
 {
   "servers": {
     "org-roam": {
-      "command": "uv",
-      "args": ["run", "--no-config", "--directory",
-               "/path/to/org-roam-mcp", "org-roam-mcp"]
+      "command": "uvx",
+      "args": ["--no-config", "--from",
+               "git+https://github.com/ChristianGeng/org-roam-mcp",
+               "org-roam-mcp"]
     }
   }
 }
@@ -105,15 +170,43 @@ and other clients take the same command:
 
 ## Finding the database
 
-The server uses the first of:
+The server uses the first of these that holds an org-roam database (one
+with org-roam's `files` and `nodes` tables):
 
-1. `org-roam-db-location` from the running Emacs (`emacsclient`);
-2. the `ORG_ROAM_DB` environment variable;
-3. `~/doom-emacs/.local/cache/org-roam.db`, `~/emacs-conf/org-roam.db`,
-   `~/.emacs.d/org-roam.db`, `~/.emacs.d/.local/cache/org-roam.db`,
-   `~/.config/emacs/org-roam.db`, `~/.local/share/emacs/org-roam.db`.
+1. **A running Emacs.** The server asks it for `org-roam-db-location`
+   through `emacsclient`: first the default server (`emacsclient` itself
+   reads `EMACS_SERVER_FILE`), then the server named by
+   `EMACS_SOCKET_NAME` if it is set, then the default sockets
+   `/run/user/<uid>/emacs/server` and `/tmp/emacs<uid>/server`. Emacs
+   needs `(server-start)` and org-roam loaded.
+2. **`ORG_ROAM_DB`,** the full path of `org-roam.db`.
+3. **The standard places** of vanilla Emacs and Doom Emacs:
+   - `~/.emacs.d/org-roam.db`
+   - `~/.emacs.d/.local/cache/org-roam.db`
+   - `$XDG_CONFIG_HOME/emacs/org-roam.db`
+   - `$XDG_CONFIG_HOME/emacs/.local/cache/org-roam.db`
 
-Each candidate must have org-roam's `files` and `nodes` tables.
+   `$XDG_CONFIG_HOME` is `~/.config` when it is not set.
+
+If your database is somewhere else and Emacs is not running, set
+`ORG_ROAM_DB`, for example in the client's command:
+
+```bash
+claude mcp add --scope user org-roam -e ORG_ROAM_DB="$HOME/path/to/org-roam.db" -- \
+  uvx --no-config --from git+https://github.com/ChristianGeng/org-roam-mcp org-roam-mcp
+```
+
+**An Emacs server with another name** (`server-name`) is found when
+`EMACS_SOCKET_NAME` is set for the MCP server: the server passes it to
+`emacsclient` as `--socket-name`, so this works with any Emacs version
+(`emacsclient` reads the variable itself only from Emacs 27 on). **A TCP
+server** (`server-use-tcp`) is found when `EMACS_SERVER_FILE` is set.
+Otherwise use `ORG_ROAM_DB`.
+
+If nothing is found, the error lists every place that was tried, in this
+order, and says how to fix it. A database that was found is used for 60
+seconds without looking again, so an Emacs that does not answer does not
+slow down every query.
 
 ## Development
 
