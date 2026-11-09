@@ -208,6 +208,50 @@ order, and says how to fix it. A database that was found is used for 60
 seconds without looking again, so an Emacs that does not answer does not
 slow down every query.
 
+## Skills
+
+Skills are instructions for an AI agent that use this server's tools. They
+live next to the server in `skills/`; the server itself does not change.
+
+### org-roam-infographic
+
+`skills/org-roam-infographic/` tells the agent how to make an infographic
+from org-roam notes **with code**: it reads the notes through this server,
+takes every number and date only from the notes, picks a form (timeline,
+bar or line chart, comparison, process, map of linked notes), and draws
+one SVG file (or one self-contained HTML file when it needs interaction).
+It checks the file with `check_svg.py`, renders it once to look at it, and
+saves it next to the note without overwriting anything. It sends nothing
+anywhere: no image API, no upload. Image models draw text and numbers
+badly; code draws them exactly, and the file can be edited later.
+
+See the [synthetic example](docs/examples.md#infographic-skill-a-synthetic-example).
+
+**Claude Code** reads skills from `~/.claude/skills/` (all projects) or
+`.claude/skills/` (one project). Link the skill folder there, for example
+from a local clone:
+
+```bash
+mkdir -p ~/.claude/skills
+ln -s ~/src/org-roam-mcp/skills/org-roam-infographic ~/.claude/skills/org-roam-infographic
+```
+
+**OpenCode** reads the same `SKILL.md` files. It looks in
+`~/.config/opencode/skills/` and `.opencode/skills/`, and also in
+`~/.claude/skills/` and `.claude/skills/`, so the link above works for both
+(see OpenCode's [skills](https://opencode.ai/docs/skills/) page). To link it
+for OpenCode only:
+
+```bash
+mkdir -p ~/.config/opencode/skills
+ln -s ~/src/org-roam-mcp/skills/org-roam-infographic ~/.config/opencode/skills/org-roam-infographic
+```
+
+The skill needs this MCP server to be set up in the same client (see
+[Install](#install) and [Other clients](#other-clients)), and Python 3.10+
+for `check_svg.py`. After `git pull` in the clone, the linked skill is up to
+date.
+
 ## Development
 
 ```bash

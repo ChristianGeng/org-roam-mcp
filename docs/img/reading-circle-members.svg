@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="440" viewBox="0 0 720 440" role="img" aria-labelledby="title desc">
+  <title id="title">Reading circle: members at the start of each year, 2022 to 2026</title>
+  <desc id="desc">Bar chart. 2022: 8 members. 2023: 12. 2024: 15. 2025: 14. 2026: 19. Synthetic example data.</desc>
+  <style>
+    text { font-family: "DejaVu Sans", "Helvetica Neue", Arial, sans-serif; fill: #1f2933; }
+    .title { font-size: 22px; font-weight: 700; }
+    .subtitle { font-size: 14px; fill: #52606d; }
+    .value { font-size: 16px; font-weight: 700; }
+    .year { font-size: 14px; fill: #3e4c59; }
+    .source { font-size: 12px; fill: #52606d; }
+    .bar { fill: #2f6f9f; }
+    .bar.last { fill: #c05621; }
+    .axis { stroke: #9aa5b1; stroke-width: 1; }
+  </style>
+  <!-- Its own light card, so the chart reads the same on a light or a dark page. -->
+  <rect x="0" y="0" width="720" height="440" rx="16" fill="#f8fafc" stroke="#cbd2d9"/>
+  <text class="title" x="40" y="52">Reading circle: members per year</text>
+  <text class="subtitle" x="40" y="78">Members at the start of each year, 2022 to 2026</text>
+
+  <!-- Bars: height 14 px per member, base line at y = 360. -->
+  <line class="axis" x1="40" y1="360" x2="680" y2="360"/>
+  <g>
+    <rect class="bar" x="80" y="248" width="80" height="112"/>
+    <text class="value" x="120" y="238" text-anchor="middle">8</text>
+    <text class="year" x="120" y="382" text-anchor="middle">2022</text>
+  </g>
+  <g>
+    <rect class="bar" x="200" y="192" width="80" height="168"/>
+    <text class="value" x="240" y="182" text-anchor="middle">12</text>
+    <text class="year" x="240" y="382" text-anchor="middle">2023</text>
+  </g>
+  <g>
+    <rect class="bar" x="320" y="150" width="80" height="210"/>
+    <text class="value" x="360" y="140" text-anchor="middle">15</text>
+    <text class="year" x="360" y="382" text-anchor="middle">2024</text>
+  </g>
+  <g>
+    <rect class="bar" x="440" y="164" width="80" height="196"/>
+    <text class="value" x="480" y="154" text-anchor="middle">14</text>
+    <text class="year" x="480" y="382" text-anchor="middle">2025</text>
+  </g>
+  <g>
+    <rect class="bar last" x="560" y="94" width="80" height="266"/>
+    <text class="value" x="600" y="84" text-anchor="middle">19</text>
+    <text class="year" x="600" y="382" text-anchor="middle">2026</text>
+  </g>
+
+  <text class="source" x="40" y="418">Source: org-roam note "reading-circle" (synthetic example data); drawn 2026-11-09</text>
+</svg>
