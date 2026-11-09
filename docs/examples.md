@@ -367,3 +367,45 @@ Session 3:
   1. org_roam_graph_stats()  → Final verification
   → Density improved, components consolidated
 ```
+
+## Infographic skill: a synthetic example
+
+The skill in `skills/org-roam-infographic/` draws infographics from notes
+with code. This example uses a **made-up** note; it is not from anyone's
+graph.
+
+The note, `reading-circle.org`:
+
+```org
+:PROPERTIES:
+:ID:       00000000-0000-4000-8000-000000000001
+:END:
+#+title: reading-circle
+
+A small reading circle. Members at the start of each year:
+
+- 2022-01-01: 8 members
+- 2023-01-01: 12 members
+- 2024-01-01: 15 members
+- 2025-01-01: 14 members
+- 2026-01-01: 19 members
+```
+
+The request and what the skill does:
+
+```
+You: "Make an infographic of the reading circle's members per year."
+
+Claude: org_roam_find("reading-circle") → org_roam_read_node(<id>)
+        five dates and numbers → a bar chart (few points over time)
+        draws one SVG file, runs check_svg.py, renders it once and looks at it
+        saves reading-circle-members-2026-11-09.svg next to the note
+```
+
+The result, [`img/reading-circle-members.svg`](img/reading-circle-members.svg):
+
+![Reading circle: members per year, 2022 to 2026, as a bar chart](img/reading-circle-members.svg)
+
+Every number in the picture is in the note. The chart sits on its own
+light card, so it reads the same on a light and a dark page, and its text
+is real SVG text that can be searched and edited.
