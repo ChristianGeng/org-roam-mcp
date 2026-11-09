@@ -61,12 +61,40 @@ def _is_valid_roam_db(db_path: Path) -> bool:
 
 
 def _server_file_candidates() -> list[str]:
-    """Return likely Emacs server socket locations for the current user."""
+    """Return likely Emacs server socket locations for the current user.
+
+    These are the sockets of the default server name. A server with another
+    name, or a TCP server, is reached by the plain emacsclient call when
+    EMACS_SOCKET_NAME or EMACS_SERVER_FILE is set, because emacsclient reads
+    those variables itself.
+    """
     uid = os.getuid()
     return [
         f"/run/user/{uid}/emacs/server",
         f"/tmp/emacs{uid}/server",
     ]
+
+
+def _xdg_config_home() -> Path:
+    """Return $XDG_CONFIG_HOME, or ~/.config when it is unset or empty."""
+    value = os.environ.get("XDG_CONFIG_HOME")
+    if value:
+        return Path(value).expanduser()
+    return Path.home() / ".config"
+
+
+def fallback_locations() -> list[Path]:
+    """Return the standard places of org-roam.db, in the order they are tried.
+
+    Vanilla Emacs keeps the database in the Emacs folder, Doom in its cache
+    folder; both Emacs folders are tried: ~/.emacs.d and
+    $XDG_CONFIG_HOME/emacs (default ~/.config/emacs).
+    """
+    places = []
+    for emacs_dir in (Path.home() / ".emacs.d", _xdg_config_home() / "emacs"):
+        places.append(emacs_dir / "org-roam.db")
+        places.append(emacs_dir / ".local" / "cache" / "org-roam.db")
+    return places
 
 
 def _detect_db_from_server(server_file: str | None = None) -> str | None:
@@ -100,39 +128,52 @@ def _detect_db_from_server(server_file: str | None = None) -> str | None:
     return None
 
 
+def _server_label(server_file: str | None) -> str:
+    """Describe one Emacs server attempt for the error message."""
+    if server_file is None:
+        return "Emacs server through emacsclient (default name, or EMACS_SOCKET_NAME / EMACS_SERVER_FILE if set)"
+    return f"Emacs server at {server_file}"
+
+
 def detect_db() -> str:
     """Locate the org-roam SQLite database.
 
     Detection order:
-    1. Emacs server introspection via emacsclient
-    2. ORG_ROAM_DB environment variable
-    3. Common filesystem locations
+    1. A running Emacs, asked through emacsclient for org-roam-db-location
+    2. The ORG_ROAM_DB environment variable
+    3. The standard places (see fallback_locations)
+
+    Raises FileNotFoundError with every place tried when none holds a
+    usable org-roam database.
     """
+    tried = []
     for server_file in [None, *_server_file_candidates()]:
         server_db = _detect_db_from_server(server_file)
         if server_db:
             return server_db
+        tried.append(_server_label(server_file))
 
     env_db = os.environ.get("ORG_ROAM_DB")
     if env_db:
         env_path = Path(env_db).expanduser()
         if _is_valid_roam_db(env_path):
             return str(env_path)
+        tried.append(f"ORG_ROAM_DB={env_path} (not an org-roam database)")
+    else:
+        tried.append("ORG_ROAM_DB (not set)")
 
-    home = Path.home()
-    candidates = [
-        home / "doom-emacs" / ".local" / "cache" / "org-roam.db",
-        home / "emacs-conf" / "org-roam.db",
-        home / ".emacs.d" / "org-roam.db",
-        home / ".emacs.d" / ".local" / "cache" / "org-roam.db",
-        home / ".config" / "emacs" / "org-roam.db",
-        home / ".local" / "share" / "emacs" / "org-roam.db",
-    ]
-    for loc in candidates:
+    for loc in fallback_locations():
         if _is_valid_roam_db(loc):
             return str(loc)
+        tried.append(str(loc))
 
-    raise FileNotFoundError("org-roam.db not found via Emacs server, ORG_ROAM_DB, or known locations.")
+    lines = "\n".join(f"  {i}. {place}" for i, place in enumerate(tried, 1))
+    raise FileNotFoundError(
+        "org-roam.db not found. Places tried, in this order:\n"
+        f"{lines}\n"
+        "To fix it, either set ORG_ROAM_DB to the full path of your org-roam.db, "
+        "or start Emacs with org-roam loaded and run (server-start)."
+    )
 
 
 def get_connection() -> sqlite3.Connection:

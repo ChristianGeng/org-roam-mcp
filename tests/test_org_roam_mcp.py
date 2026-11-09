@@ -175,6 +175,150 @@ class TestDbDetectionOrder:
         assert db_module.detect_db() == str(env_db)
 
 
+@pytest.fixture
+def no_emacs_home(monkeypatch, tmp_path):
+    """Give a fresh home folder, with no ORG_ROAM_DB and no Emacs server to ask."""
+    import org_roam_mcp.db as db_module
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("ORG_ROAM_DB", raising=False)
+    monkeypatch.setattr(db_module, "_detect_db_from_server", lambda _server_file=None: None)
+    return home
+
+
+class TestFallbackLocations:
+    """The standard places for vanilla Emacs and Doom, without personal ones (#9)."""
+
+    @pytest.mark.parametrize(
+        "relative",
+        [
+            ".emacs.d/org-roam.db",
+            ".emacs.d/.local/cache/org-roam.db",
+            ".config/emacs/org-roam.db",
+            ".config/emacs/.local/cache/org-roam.db",
+        ],
+    )
+    def test_each_standard_place_is_found(self, no_emacs_home, relative):
+        """Each standard place holds a database the lookup finds."""
+        import org_roam_mcp.db as db_module
+
+        db_path = no_emacs_home / relative
+        db_path.parent.mkdir(parents=True)
+        _create_valid_roam_db(db_path)
+
+        assert db_module.detect_db() == str(db_path)
+
+    def test_xdg_config_home_moves_the_second_emacs_folder(self, no_emacs_home, monkeypatch, tmp_path):
+        """With XDG_CONFIG_HOME set, the Doom cache is looked for under it."""
+        import org_roam_mcp.db as db_module
+
+        xdg = tmp_path / "xdg"
+        db_path = xdg / "emacs" / ".local" / "cache" / "org-roam.db"
+        db_path.parent.mkdir(parents=True)
+        _create_valid_roam_db(db_path)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+
+        assert db_module.detect_db() == str(db_path)
+
+    def test_personal_places_are_not_tried(self, no_emacs_home):
+        """Databases in the owner's old folders are neither tried nor found."""
+        import org_roam_mcp.db as db_module
+
+        for relative in ("doom-emacs/.local/cache/org-roam.db", "emacs-conf/org-roam.db"):
+            db_path = no_emacs_home / relative
+            db_path.parent.mkdir(parents=True)
+            _create_valid_roam_db(db_path)
+
+        tried = [str(p) for p in db_module.fallback_locations()]
+        assert not any("doom-emacs" in p or "emacs-conf" in p for p in tried)
+        with pytest.raises(FileNotFoundError):
+            db_module.detect_db()
+
+    def test_org_roam_db_wins_over_the_standard_places(self, no_emacs_home, monkeypatch, tmp_path):
+        """ORG_ROAM_DB is used before any standard place."""
+        import org_roam_mcp.db as db_module
+
+        standard = no_emacs_home / ".emacs.d" / "org-roam.db"
+        standard.parent.mkdir(parents=True)
+        _create_valid_roam_db(standard)
+        env_db = tmp_path / "chosen.db"
+        _create_valid_roam_db(env_db)
+        monkeypatch.setenv("ORG_ROAM_DB", str(env_db))
+
+        assert db_module.detect_db() == str(env_db)
+
+    def test_error_lists_every_place_tried_and_how_to_fix_it(self, no_emacs_home):
+        """The error names the servers, ORG_ROAM_DB and each standard place, in order."""
+        import org_roam_mcp.db as db_module
+
+        with pytest.raises(FileNotFoundError) as excinfo:
+            db_module.detect_db()
+        message = str(excinfo.value)
+
+        positions = [message.index("emacsclient"), message.index("ORG_ROAM_DB (not set)")]
+        positions += [message.index(str(p)) for p in db_module.fallback_locations()]
+        assert positions == sorted(positions)
+        assert "set ORG_ROAM_DB" in message
+        assert "(server-start)" in message
+
+    def test_error_says_when_org_roam_db_is_not_a_database(self, no_emacs_home, monkeypatch, tmp_path):
+        """A wrong ORG_ROAM_DB is named in the error."""
+        import org_roam_mcp.db as db_module
+
+        wrong = tmp_path / "missing.db"
+        monkeypatch.setenv("ORG_ROAM_DB", str(wrong))
+
+        with pytest.raises(FileNotFoundError) as excinfo:
+            db_module.detect_db()
+        assert f"ORG_ROAM_DB={wrong} (not an org-roam database)" in str(excinfo.value)
+
+
+class TestCommandLine:
+    """--help and --version print and exit 0 without starting the server (#9)."""
+
+    @pytest.fixture
+    def no_server(self, monkeypatch):
+        """Fail the test if the MCP server would start."""
+        import org_roam_mcp.server as server_module
+
+        def must_not_run(*_args, **_kwargs):
+            raise AssertionError("the server started")
+
+        monkeypatch.setattr(server_module.mcp, "run", must_not_run)
+        return server_module
+
+    def test_help_prints_usage_and_exits_zero(self, no_server, capsys):
+        """--help explains the server, the lookup order and the variables."""
+        with pytest.raises(SystemExit) as excinfo:
+            no_server.main(["--help"])
+        assert excinfo.value.code == 0
+        out = capsys.readouterr().out
+        assert "usage: org-roam-mcp" in out
+        for text in ("ORG_ROAM_DB", "EMACS_SOCKET_NAME", "XDG_CONFIG_HOME", "emacsclient", ".emacs.d"):
+            assert text in out
+
+    def test_version_prints_the_package_version_and_exits_zero(self, no_server, capsys):
+        """--version prints the installed package version."""
+        from importlib.metadata import version
+
+        with pytest.raises(SystemExit) as excinfo:
+            no_server.main(["--version"])
+        assert excinfo.value.code == 0
+        assert capsys.readouterr().out.strip() == f"org-roam-mcp {version('org-roam-mcp')}"
+
+    def test_no_arguments_starts_the_server(self, monkeypatch):
+        """Without arguments, main() runs the MCP server as before."""
+        import org_roam_mcp.server as server_module
+
+        started = []
+        monkeypatch.setattr(server_module.mcp, "run", lambda: started.append(True))
+        server_module.main([])
+        assert started == [True]
+
+
 class TestGraphLoading:
     """Test graph loading from database."""
 
