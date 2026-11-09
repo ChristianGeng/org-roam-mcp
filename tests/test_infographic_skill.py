@@ -20,6 +20,7 @@ check_svg = _load_check_svg()
 
 GOOD = """<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200" viewBox="0 0 400 200">
   <title>Two numbers</title>
+  <desc>A is 3.</desc>
   <rect x="0" y="0" width="400" height="200" fill="#f8fafc"/>
   <text x="20" y="40">A: 3</text>
 </svg>"""
@@ -94,6 +95,45 @@ class TestCheckSvg:
         """Without a filled rect over the whole picture, dark pages are a problem."""
         bad = GOOD.replace('fill="#f8fafc"', 'fill="none"')
         assert any("background card" in p for p in check_svg.check(bad))
+
+    def test_missing_width_or_height_attribute(self):
+        """A viewBox alone is not enough; width= and height= must be set."""
+        no_width = GOOD.replace(' width="400"', "", 1)
+        no_height = GOOD.replace(' height="200"', "", 1)
+        assert any("no width=" in p for p in check_svg.check(no_width))
+        assert any("no height=" in p for p in check_svg.check(no_height))
+
+    def test_card_must_cover_an_offset_view_box(self):
+        """With viewBox "-20 -20 400 200", a card at 0,0 leaves part uncovered."""
+        offset = GOOD.replace('viewBox="0 0 400 200"', 'viewBox="-20 -20 400 200"')
+        assert any("background card" in p for p in check_svg.check(offset))
+        covered = offset.replace('<rect x="0" y="0"', '<rect x="-20" y="-20"')
+        assert check_svg.check(covered) == []
+
+    def test_card_drawn_after_the_text_is_reported(self):
+        """A card painted after the labels hides them."""
+        late = GOOD.replace(
+            '  <rect x="0" y="0" width="400" height="200" fill="#f8fafc"/>\n  <text x="20" y="40">A: 3</text>',
+            '  <text x="20" y="40">A: 3</text>\n  <rect x="0" y="0" width="400" height="200" fill="#f8fafc"/>',
+        )
+        assert any("drawn after text" in p for p in check_svg.check(late))
+
+    def test_missing_desc(self):
+        """<desc> with the message and the numbers is required, like <title>."""
+        bad = GOOD.replace("  <desc>A is 3.</desc>\n", "")
+        assert any("no <desc>" in p for p in check_svg.check(bad))
+
+    def test_relative_url_in_style_or_attribute(self):
+        """A url(...) to another file is reported; url(#id) inside the file is fine."""
+        in_style = GOOD.replace("</svg>", "<style>rect { filter: url(./effects.svg#blur); }</style></svg>")
+        assert any("url(./effects.svg#blur)" in p for p in check_svg.check(in_style))
+        in_attr = GOOD.replace('fill="#f8fafc"', 'fill="url(other.svg#grad)"')
+        assert any("url(other.svg#grad)" in p for p in check_svg.check(in_attr))
+        local = GOOD.replace(
+            "</svg>",
+            '<defs><linearGradient id="g"/></defs><rect x="0" y="0" width="10" height="10" fill="url(#g)"/></svg>',
+        )
+        assert check_svg.check(local) == []
 
     def test_main_exit_status(self, tmp_path, capsys):
         """main() prints ok or the problems, and returns 0 or 1."""

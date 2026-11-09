@@ -12,11 +12,13 @@ import sys
 import xml.etree.ElementTree as ET
 
 
-SVG_NS = "{http://www.w3.org/2000/svg}"
 XLINK_HREF = "{http://www.w3.org/1999/xlink}href"
 MAX_WIDTH = 1200
 FORBIDDEN_TAGS = {"script", "foreignObject", "image"}
-EXTERNAL_URL = re.compile(r"(?:https?:)?//|@import|@font-face", re.IGNORECASE)
+# Elements that describe or style the picture but draw nothing.
+NOT_DRAWN = {"svg", "title", "desc", "style", "defs", "metadata"}
+URL_IN_CSS = re.compile(r"url\(\s*['\"]?([^)'\"]*)", re.IGNORECASE)
+CSS_LOADS = re.compile(r"@import|@font-face", re.IGNORECASE)
 
 
 def _local(tag: str) -> str:
@@ -25,36 +27,43 @@ def _local(tag: str) -> str:
 
 
 def _number(value: str | None) -> float | None:
-    """Read a length such as "720" or "720px"; None if it is not one."""
+    """Read a length such as "720", "-20" or "720px"; None if it is not one."""
     if value is None:
         return None
-    match = re.fullmatch(r"\s*([0-9]+(?:\.[0-9]+)?)\s*(?:px)?\s*", value)
+    match = re.fullmatch(r"\s*(-?[0-9]+(?:\.[0-9]+)?)\s*(?:px)?\s*", value)
     return float(match.group(1)) if match else None
 
 
-def _width(root: ET.Element) -> float | None:
-    """Return the picture's width from width= or else from the viewBox."""
-    width = _number(root.get("width"))
-    if width is not None:
-        return width
+def _view_box(root: ET.Element) -> tuple[float, float, float, float] | None:
+    """Return the viewBox as (min_x, min_y, width, height), or None."""
     view_box = root.get("viewBox")
-    if view_box:
-        parts = view_box.replace(",", " ").split()
-        if len(parts) == 4:
-            return _number(parts[2])
-    return None
+    if not view_box:
+        return None
+    parts = [_number(part) for part in view_box.replace(",", " ").split()]
+    if len(parts) != 4 or any(part is None for part in parts):
+        return None
+    return tuple(parts)
 
 
-def _covers_picture(rect: ET.Element, width: float | None, height: float | None) -> bool:
-    """Whether a <rect> is a filled background card over the whole picture."""
+def _covers_picture(rect: ET.Element, view_box: tuple[float, float, float, float] | None) -> bool:
+    """Whether a <rect> is filled and covers the whole viewBox, offset included."""
     if rect.get("fill") in (None, "none", "transparent"):
         return False
-    if _number(rect.get("x") or "0") != 0 or _number(rect.get("y") or "0") != 0:
+    if rect.get("width") == "100%" and rect.get("height") == "100%":
+        return _number(rect.get("x") or "0") == 0 and _number(rect.get("y") or "0") == 0
+    if view_box is None:
         return False
-    w, h = rect.get("width"), rect.get("height")
-    if w == "100%" and h == "100%":
-        return True
-    return width is not None and height is not None and _number(w) == width and _number(h) == height
+    x, y = _number(rect.get("x") or "0"), _number(rect.get("y") or "0")
+    w, h = _number(rect.get("width")), _number(rect.get("height"))
+    if None in (x, y, w, h):
+        return False
+    min_x, min_y, width, height = view_box
+    return x <= min_x and y <= min_y and x + w >= min_x + width and y + h >= min_y + height
+
+
+def _outside_urls(css: str) -> list[str]:
+    """Return the url(...) targets in CSS text that point outside the file."""
+    return [target for target in URL_IN_CSS.findall(css) if not target.strip().startswith("#")]
 
 
 def check(svg_text: str) -> list[str]:
@@ -67,14 +76,16 @@ def check(svg_text: str) -> list[str]:
         return [f"the root element is <{_local(root.tag)}>, not <svg>"]
 
     problems = []
-    width = _width(root)
-    height = _number(root.get("height"))
-    if root.get("viewBox") is None:
-        problems.append("no viewBox on <svg>")
+    view_box = _view_box(root)
+    width = _number(root.get("width"))
+    if view_box is None:
+        problems.append("no valid viewBox on <svg>")
     if width is None:
-        problems.append("no width: set width= or a viewBox")
+        problems.append("no width= on <svg>: set width, height and viewBox")
     elif width > MAX_WIDTH:
         problems.append(f"width {width:g} px is over {MAX_WIDTH} px")
+    if _number(root.get("height")) is None:
+        problems.append("no height= on <svg>: set width, height and viewBox")
 
     elements = list(root.iter())
     tags = [_local(el.tag) for el in elements]
@@ -82,22 +93,34 @@ def check(svg_text: str) -> list[str]:
         problems.append(f"<{tag}> is not allowed (one self-contained file, text as text)")
 
     for el in elements:
+        name = _local(el.tag)
         for attr in ("href", XLINK_HREF):
             href = el.get(attr)
             if href and not href.startswith("#"):
-                problems.append(f"external reference {href!r} in <{_local(el.tag)}>")
-        if _local(el.tag) == "style" and el.text and EXTERNAL_URL.search(el.text):
-            problems.append("the <style> loads something from outside (url, @import or @font-face)")
-        style = el.get("style")
-        if style and "url(" in style and "url(#" not in style:
-            problems.append(f"style={style!r} in <{_local(el.tag)}> loads something from outside")
+                problems.append(f"external reference {href!r} in <{name}>")
+        if name == "style" and el.text:
+            if CSS_LOADS.search(el.text):
+                problems.append("the <style> loads something from outside (@import or @font-face)")
+            for target in _outside_urls(el.text):
+                problems.append(f"the <style> loads url({target}) from outside the file")
+        for attr, value in el.attrib.items():
+            for target in _outside_urls(value):
+                problems.append(f"{_local(attr)}= in <{name}> loads url({target}) from outside the file")
 
     if "text" not in tags:
         problems.append("no <text>: labels must be text, not paths")
     if "title" not in tags:
         problems.append("no <title> with the message")
-    if not any(_local(el.tag) == "rect" and _covers_picture(el, width, height) for el in elements):
-        problems.append("no filled background card over the whole picture (needed for dark pages)")
+    if "desc" not in tags:
+        problems.append("no <desc> with the message and the numbers")
+
+    drawn = [el for el in elements if _local(el.tag) not in NOT_DRAWN]
+    card = next((i for i, el in enumerate(drawn) if _local(el.tag) == "rect" and _covers_picture(el, view_box)), None)
+    first_text = next((i for i, el in enumerate(drawn) if _local(el.tag) == "text"), None)
+    if card is None:
+        problems.append("no filled background card over the whole viewBox (needed for dark pages)")
+    elif first_text is not None and card > first_text:
+        problems.append("the background card is drawn after text and hides it; draw it first")
     return problems
 
 

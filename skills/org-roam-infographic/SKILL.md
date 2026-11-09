@@ -34,7 +34,7 @@ Pick the form that fits the content. One message per infographic.
 | Numbers by category | Bar chart, sorted by value unless the order means something |
 | A compared with B | Comparison table or cards |
 | Steps in order | Process or flow diagram |
-| How notes link | Small map of linked notes, from `org_roam_bfs` |
+| How notes link | Small map of linked notes: the notes from `org_roam_bfs`, the links between them from `org_roam_backlinks` for each of those notes (or the `id:` links in their text) |
 
 At most 5 to 7 items per chart. If there are more, show the most important
 ones and say what was left out, or make two infographics.
@@ -45,11 +45,15 @@ ones and say what was left out, or make two infographics.
 
 - One file. No external fonts, images, stylesheets or scripts, and no
   `<foreignObject>`.
-- At most about 1200 px wide; set `width`, `height` and `viewBox`.
+- At most about 1200 px wide; set `width`, `height` and `viewBox` on
+  `<svg>`.
 - Text as `<text>`, never as paths, so it stays searchable and editable.
   Add `<title>` and `<desc>` with the message and the numbers.
 - Readable on a light and on a dark page: draw the infographic on its own
-  filled background card (a `<rect>` that covers the whole picture).
+  filled background card, a `<rect>` that covers the whole `viewBox`, drawn
+  first, before any text.
+- No `url(...)` to anything outside the file; only `url(#id)` for
+  gradients and the like defined in the same file.
 
 **HTML (only when it needs interaction):** one self-contained file with
 inline SVG, CSS and script, and no requests to other servers.
@@ -79,8 +83,10 @@ for example: `Source: org-roam notes reading-circle, club-budget; 2026-11-09`.
 - Run the structure check, `check_svg.py`, which is next to this
   `SKILL.md` (it needs only Python 3.10+ and its standard library):
   `python3 <this skill's folder>/check_svg.py <file.svg>`.
-  It reports external references, scripts, text drawn as paths only, a
-  missing background card, and a width over 1200 px.
+  It reports external references and `url(...)`s, scripts and images, a
+  missing `width`, `height`, `viewBox`, `<title>` or `<desc>`, text drawn
+  as paths only, a missing or late background card, and a width over
+  1200 px.
 - Render the file once and look at it, for example with
   `rsvg-convert -o check.png file.svg`, or with a headless browser:
   `google-chrome --headless=new --screenshot=check.png file.svg`.
