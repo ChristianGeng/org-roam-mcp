@@ -169,6 +169,41 @@ class TestCheckSvg:
         char_escaped = GOOD.replace("</svg>", "<style>\\@import 'https://example.org/a.css';</style></svg>")
         assert any("@import" in p for p in check_svg.check(char_escaped))
 
+    def test_malformed_view_box_is_reported(self):
+        """A viewBox with units or not exactly four numbers is invalid SVG."""
+        for bad_box in ("10 10 400px 200", "0 0 400", "0 0 400 200 5"):
+            bad = GOOD.replace('viewBox="0 0 400 200"', f'viewBox="{bad_box}"')
+            assert any("no valid viewBox" in p for p in check_svg.check(bad)), bad_box
+        commas = GOOD.replace('viewBox="0 0 400 200"', 'viewBox="0,0, 400 ,200"')
+        assert check_svg.check(commas) == []
+
+    def test_card_inside_a_switch_counts_as_first(self):
+        """<switch> is a container like <g>; a card inside it is still first."""
+        switched = GOOD.replace(
+            '  <rect x="0" y="0" width="400" height="200" fill="#f8fafc"/>',
+            '  <switch><rect x="0" y="0" width="400" height="200" fill="#f8fafc"/></switch>',
+        )
+        assert check_svg.check(switched) == []
+
+    def test_card_through_use_is_not_accepted(self):
+        """The skill asks for the card as a <rect> drawn first, not reused through <use>."""
+        reused = GOOD.replace(
+            '  <rect x="0" y="0" width="400" height="200" fill="#f8fafc"/>',
+            '  <defs><rect id="card" x="0" y="0" width="400" height="200" fill="#f8fafc"/></defs>\n'
+            '  <use href="#card"/>',
+        )
+        assert any("background card" in p for p in check_svg.check(reused))
+
+    def test_escaped_backslash_cannot_fake_a_fragment(self):
+        """An escaped backslash stays a backslash, so it cannot turn an outside file into a #fragment."""
+        tricky = GOOD.replace("</svg>", '<style>rect { fill: url("\\\\23 file.svg"); }</style></svg>')
+        assert any("from outside the file" in p for p in check_svg.check(tricky))
+        fragment = GOOD.replace(
+            "</svg>",
+            '<defs><linearGradient id="file.svg"/></defs><style>rect { fill: url(\\23 file.svg); }</style></svg>',
+        )
+        assert not any("from outside the file" in p for p in check_svg.check(fragment))
+
     def test_main_exit_status(self, tmp_path, capsys):
         """main() prints ok or the problems, and returns 0 or 1."""
         good = tmp_path / "good.svg"

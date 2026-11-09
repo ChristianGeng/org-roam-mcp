@@ -16,12 +16,14 @@ XLINK_HREF = "{http://www.w3.org/1999/xlink}href"
 MAX_WIDTH = 1200
 FORBIDDEN_TAGS = {"script", "foreignObject", "image"}
 # Elements that describe or style the picture but draw nothing.
-NOT_DRAWN = {"svg", "title", "desc", "style", "defs", "metadata", "g", "a"}
+NOT_DRAWN = {"svg", "title", "desc", "style", "defs", "metadata", "g", "a", "switch"}
 # Containers whose content is a template, painted only where it is used.
 TEMPLATES = {"defs", "symbol", "clipPath", "mask", "marker", "pattern", "linearGradient", "radialGradient", "filter"}
 NUMBER = r"-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
-CSS_ESCAPE_HEX = re.compile(r"\\([0-9a-fA-F]{1,6})[ \t\n\r\f]?")
-CSS_ESCAPE_CHAR = re.compile(r"\\(.)", re.DOTALL)
+# One CSS escape: a backslash and 1 to 6 hex digits (and one optional white
+# space), or a backslash and any other character. Read left to right in one
+# pass, so an escaped backslash ("\\\\") stays a backslash.
+CSS_ESCAPE = re.compile(r"\\(?:([0-9a-fA-F]{1,6})[ \t\n\r\f]?|(.))", re.DOTALL)
 URL_IN_CSS = re.compile(r"url\(\s*['\"]?([^)'\"]*)", re.IGNORECASE)
 CSS_LOADS = re.compile(r"@import|@font-face", re.IGNORECASE)
 
@@ -44,10 +46,11 @@ def _view_box(root: ET.Element) -> tuple[float, float, float, float] | None:
     view_box = root.get("viewBox")
     if not view_box:
         return None
-    parts = [float(part) for part in re.findall(NUMBER, view_box)]
-    if len(parts) != 4 or any(part is None for part in parts):
+    # Exactly four numbers, separated by white space and/or one comma; no units.
+    separator = r"(?:\s*,\s*|\s+)"
+    if not re.fullmatch(rf"\s*{NUMBER}(?:{separator}{NUMBER}){{3}}\s*", view_box):
         return None
-    return tuple(parts)
+    return tuple(float(part) for part in re.findall(NUMBER, view_box))
 
 
 def _covers_picture(rect: ET.Element, view_box: tuple[float, float, float, float] | None) -> bool:
@@ -71,8 +74,14 @@ def _unescape_css(css: str) -> str:
 
     So an escape cannot hide a url( or an @import.
     """
-    css = CSS_ESCAPE_HEX.sub(lambda m: chr(int(m.group(1), 16)) if int(m.group(1), 16) <= 0x10FFFF else "", css)
-    return CSS_ESCAPE_CHAR.sub(lambda m: m.group(1), css)
+
+    def decode(match: re.Match) -> str:
+        if match.group(1) is not None:
+            code = int(match.group(1), 16)
+            return chr(code) if 0 < code <= 0x10FFFF else "\ufffd"
+        return match.group(2)
+
+    return CSS_ESCAPE.sub(decode, css)
 
 
 def _outside_urls(css: str) -> list[str]:
