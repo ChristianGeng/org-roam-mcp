@@ -3,8 +3,9 @@
 An MCP server that gives AI agents access to an
 [org-roam](https://www.orgroam.com/) knowledge graph.
 
-Reads query the org-roam SQLite database directly, so they work without
-Emacs. `org_roam_sync` and `emacs_eval` go through `emacsclient` and need a
+It needs no API key: the AI client brings the model. Reads query the
+org-roam SQLite database directly, so they work without Emacs.
+`org_roam_sync` and `emacs_eval` go through `emacsclient` and need a
 running Emacs server (`M-x server-start`).
 
 ```text
@@ -99,6 +100,55 @@ Check with `claude mcp list`; then in a session ask for
 `org_roam_find("some title")`.
 
 ## Other clients
+
+The server uses no API keys and no model of its own. The client (Claude
+Code, OpenCode, an editor) brings the model and its key; the server only
+reads the local org-roam database and, for `org_roam_sync` and
+`emacs_eval`, talks to the local Emacs.
+
+### OpenCode
+
+Add the server as a local MCP server, either with OpenCode's command:
+
+```bash
+opencode mcp add org-roam -- \
+  uvx --no-config --from git+https://github.com/ChristianGeng/org-roam-mcp org-roam-mcp
+```
+
+or by hand in OpenCode's config: `opencode.json` (or `opencode.jsonc`) in a
+project, or `~/.config/opencode/opencode.json` for every project. With
+OpenCode's current config format (V2), local servers go under
+`mcp.servers`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "org-roam": {
+        "type": "local",
+        "command": ["uvx", "--no-config", "--from",
+                    "git+https://github.com/ChristianGeng/org-roam-mcp",
+                    "org-roam-mcp"],
+        "environment": {
+          "ORG_ROAM_DB": "/home/you/.config/emacs/.local/cache/org-roam.db"
+        }
+      }
+    }
+  }
+}
+```
+
+`environment` is only needed when Emacs is not running and the database is
+not in a standard place (see [Finding the database](#finding-the-database));
+otherwise leave it out. With the command, pass it as
+`opencode mcp add org-roam --env ORG_ROAM_DB=… -- uvx …`. The older V1
+format puts `"org-roam"` directly under `"mcp"` (with `"enabled": true`
+instead of `"disabled"`); OpenCode still reads it. See OpenCode's
+[MCP servers](https://opencode.ai/docs/mcp-servers/) and
+[config](https://opencode.ai/docs/config/) pages.
+
+### VS Code, Windsurf and others
 
 VS Code (`.vscode/mcp.json`), Windsurf (`~/.codeium/windsurf/mcp_config.json`)
 and other clients take the same command:
