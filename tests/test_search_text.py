@@ -7,6 +7,7 @@ import pytest
 
 import org_roam_mcp.db as db_module
 from org_roam_mcp.search_text import parse_query
+from org_roam_mcp.search_text import search_lines
 from org_roam_mcp.search_text import search_text
 
 
@@ -192,6 +193,14 @@ class TestSearchText:
         assert snippet.startswith("…") and snippet.endswith("…")
         assert "**needle**" in snippet
         assert 115 <= len(snippet) <= 130
+
+
+class TestSearchLines:
+    def test_phrase_does_not_go_over_left_out_lines(self):
+        """Lines 8 to 14 were left out (a drawer or a child node), so the phrase is not there."""
+        assert search_lines([(7, "in the morning."), (15, "Seeds here.")], ["morning. seeds"]) is None
+        hit = search_lines([(7, "in the morning."), (8, "Seeds here.")], ["morning. seeds"])
+        assert hit == (1, 7, "in the **morning. Seeds** here.")
 
 
 class TestParseQuery:
