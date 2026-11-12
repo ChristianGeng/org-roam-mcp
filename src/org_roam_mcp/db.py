@@ -245,12 +245,18 @@ def quote_param(value: str) -> str:
     return f'"{value}"'
 
 
-def query(sql: str, params: tuple = ()) -> list[dict]:
-    """Execute a read-only query and return results as list of dicts."""
-    conn = get_connection()
+def query(sql: str, params: tuple = (), conn: sqlite3.Connection | None = None) -> list[dict]:
+    """Execute a read-only query and return results as list of dicts.
+
+    With conn, the query runs on that connection, which stays open.
+    """
+    own = conn is None
+    if own:
+        conn = get_connection()
     try:
         cursor = conn.execute(sql, params)
         columns = [desc[0] for desc in cursor.description] if cursor.description else []
         return [{col: _strip_elisp_quotes(val) for col, val in zip(columns, row)} for row in cursor.fetchall()]
     finally:
-        conn.close()
+        if own:
+            conn.close()

@@ -34,6 +34,7 @@ KITCHEN = """:PROPERTIES:
 #+title: Kitchen
 
 A sauce of tomatoes and basil, cooked slowly.
+More basil, and basil on top.
 """
 
 TRAVEL = """:PROPERTIES:
@@ -95,9 +96,9 @@ class TestSearchText:
 
     def test_word_under_a_heading_that_is_its_own_node(self, notes):
         """A word under a heading node belongs to that node, not to the file's node."""
-        rows = _rows(search_text("COMPOST"))
+        rows = _rows(search_text("HEAP"))
         assert [row[0] for row in rows] == ["head-compost"]
-        assert rows[0][2].endswith("garden.org:9")
+        assert rows[0][2].endswith("garden.org:13")
 
     def test_word_under_a_heading_without_an_id_belongs_to_the_file(self, notes):
         """A heading without an ID is part of the file's node."""
@@ -108,12 +109,13 @@ class TestSearchText:
     def test_several_words_must_all_occur_in_any_order(self, notes):
         """All words must be in the node; their order does not matter."""
         rows = _rows(search_text("basil tomatoes"))
-        assert [row[0] for row in rows] == ["file-garden", "file-kitchen"]
+        assert {row[0] for row in rows} == {"file-garden", "file-kitchen"}
         assert _rows(search_text("basil compost")) == []
 
     def test_more_hits_first_then_title(self, notes):
-        """Garden has three hits for the two words, Kitchen two."""
-        assert [row[1] for row in _rows(search_text("tomatoes basil"))] == ["Garden", "Kitchen"]
+        """Kitchen has basil three times, Garden once; "green" is once in each."""
+        assert [row[1] for row in _rows(search_text("basil"))] == ["Kitchen", "Garden"]
+        assert [row[1] for row in _rows(search_text("tomatoes"))] == ["Garden", "Kitchen"]
         assert [row[1] for row in _rows(search_text("green"))] == ["Compost", "Travel"]
 
     def test_limit(self, notes):
@@ -128,6 +130,31 @@ class TestSearchText:
         assert [row[0] for row in rows] == ["file-kitchen"]
         assert "**tomatoes and basil**" in rows[0][3]
         assert _rows(search_text('"basil and tomatoes"')) == []
+
+    def test_limit_below_one(self, notes):
+        """A limit below 1 is an error, not "no notes"."""
+        assert search_text("tomatoes", limit=0) == "Error: limit must be at least 1."
+
+    def test_drawer_syntax_in_a_block_is_text(self, notes):
+        """Inside #+begin_example, :PROPERTIES: and :ID: are text, not a drawer."""
+        with open(notes["travel.org"], "a", encoding="utf-8") as f:
+            f.write("#+begin_example\n:PROPERTIES:\n:ID: not-a-node\n#+end_example\nThe blue lake.\n")
+        assert [row[0] for row in _rows(search_text("lake"))] == ["file-travel"]
+        assert [row[0] for row in _rows(search_text("not-a-node"))] == ["file-travel"]
+
+    def test_phrase_does_not_go_over_a_child_node(self, notes):
+        """The Compost section is between "morning." and "* Plain heading" in the file node."""
+        assert _rows(search_text('"morning. * plain heading"')) == []
+        with open(notes["travel.org"], "a", encoding="utf-8") as f:
+            f.write("The road ends\nat the sea.\n")
+        assert [row[0] for row in _rows(search_text('"road ends at the sea"'))] == ["file-travel"]
+
+    def test_case_folding_beyond_ascii(self, notes):
+        """İ (which lower-cases to two characters) and final sigma match."""
+        with open(notes["travel.org"], "a", encoding="utf-8") as f:
+            f.write("From İzmir along the ΟΔΟΣ.\n")
+        assert [row[0] for row in _rows(search_text("İZMIR"))] == ["file-travel"]
+        assert [row[0] for row in _rows(search_text("οδος"))] == ["file-travel"]
 
     def test_no_hit(self, notes):
         """No node contains the word."""

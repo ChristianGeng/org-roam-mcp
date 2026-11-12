@@ -18,24 +18,43 @@ _HEADING = re.compile(r"^(\*+)\s")
 _ID_LINE = re.compile(r"^\s*:ID:\s*(\S+)\s*$", re.IGNORECASE)
 _DRAWER_START = re.compile(r"^\s*:PROPERTIES:\s*$", re.IGNORECASE)
 _DRAWER_END = re.compile(r"^\s*:END:\s*$", re.IGNORECASE)
+_BLOCK_START = re.compile(r"^\s*#\+begin_\S", re.IGNORECASE)
+_BLOCK_END = re.compile(r"^\s*#\+end_\S", re.IGNORECASE)
+# Joins lines that are not next to each other (a drawer or a child node was
+# between them). No term contains it, so a phrase cannot match over the gap.
+_GAP = "\n"
+
+
+class _FoldTable(dict):
+    """Map each character to its case-folded form, one character for one."""
+
+    def __missing__(self, code: int) -> str:
+        char = chr(code)
+        folded = char.casefold()
+        if len(folded) != 1:
+            folded = char.lower()
+        if len(folded) != 1:
+            folded = char
+        self[code] = folded
+        return folded
+
+
+_FOLD_TABLE = _FoldTable()
 
 
 def parse_query(query: str) -> list[str]:
     """Split a query into lower-case terms: words, and phrases in double quotes."""
     terms = []
     for phrase, word in _TERM.findall(query):
-        term = " ".join((phrase or word.strip('"')).split()).lower()
+        term = _fold(" ".join((phrase or word.strip('"')).split()))
         if term and term not in terms:
             terms.append(term)
     return terms
 
 
 def _fold(text: str) -> str:
-    """Lower-case text without changing its length, so positions stay the same."""
-    low = text.lower()
-    if len(low) == len(text):
-        return low
-    return "".join(low if len(low := c.lower()) == 1 else c for c in text)
+    """Case-fold text without changing its length, so positions stay the same."""
+    return text.translate(_FOLD_TABLE)
 
 
 def node_lines(text: str, node_ids: set[str], file_node: str | None) -> dict[str, list[tuple[int, str]]]:
@@ -43,16 +62,24 @@ def node_lines(text: str, node_ids: set[str], file_node: str | None) -> dict[str
 
     A line belongs to the innermost heading with an ID that is in node_ids,
     otherwise to file_node (lines that belong to no node are left out).
-    Property drawers and :ID: lines are left out.
+    Property drawers and :ID: lines are left out. Inside a block
+    (#+begin_src, #+begin_example, ...) lines are text, not drawers; a
+    heading still ends the block, as in Org.
     """
     lines = text.splitlines()
     # The ID of each heading (by its index in lines); -1 is the file level.
     heading_ids: dict[int, str] = {}
     heading = -1
     in_drawer = False
+    in_block = False
     skipped = set()
     for i, line in enumerate(lines):
-        if in_drawer:
+        if _HEADING.match(line):
+            heading = i
+            in_drawer = in_block = False
+        elif in_block:
+            in_block = not _BLOCK_END.match(line)
+        elif in_drawer:
             skipped.add(i)
             match = _ID_LINE.match(line)
             if match and heading not in heading_ids:
@@ -61,8 +88,8 @@ def node_lines(text: str, node_ids: set[str], file_node: str | None) -> dict[str
         elif _DRAWER_START.match(line):
             skipped.add(i)
             in_drawer = True
-        elif _HEADING.match(line):
-            heading = i
+        elif _BLOCK_START.match(line):
+            in_block = True
         elif _ID_LINE.match(line):
             skipped.add(i)
 
@@ -89,21 +116,21 @@ def search_lines(lines: list[tuple[int, str]], terms: list[str]) -> tuple[int, i
 
     Returns (number of hits, line number of the first hit, snippet), or None
     when a term is missing. Whitespace is collapsed, so a phrase may go over
-    the end of a line.
+    the end of a line, but not over lines that were left out.
     """
-    parts = []
+    text = ""
     starts = []
     numbers = []
-    offset = 0
+    previous = None
     for number, line in lines:
         part = " ".join(line.split())
-        if not part:
-            continue
-        parts.append(part)
-        starts.append(offset)
-        numbers.append(number)
-        offset += len(part) + 1
-    text = " ".join(parts)
+        if part:
+            if numbers:
+                text += " " if previous == number - 1 else _GAP
+            starts.append(len(text))
+            numbers.append(number)
+            text += part
+        previous = number
     folded = _fold(text)
     hits = 0
     first = None
@@ -119,6 +146,7 @@ def search_lines(lines: list[tuple[int, str]], terms: list[str]) -> tuple[int, i
     start = max(0, at - max(0, SNIPPET_LENGTH - length) // 2)
     end = min(len(text), start + max(SNIPPET_LENGTH, length))
     start = max(0, min(start, end - SNIPPET_LENGTH))
+    text = text.replace(_GAP, " ")
     snippet = (
         ("…" if start > 0 else "")
         + text[start:at]
@@ -136,17 +164,27 @@ def search_text(query: str, limit: int = 20, tag: str | None = None) -> str:
     terms = parse_query(query)
     if not terms:
         return "Error: query is empty."
+    if limit < 1:
+        return "Error: limit must be at least 1."
     allowed = None
-    if tag:
-        rows = db.query("SELECT DISTINCT node_id FROM tags WHERE tag = ?", (db.quote_param(tag),))
-        allowed = {row["node_id"] for row in rows}
+    # One read transaction, so all three tables are from the same moment.
+    conn = db.get_connection()
+    try:
+        conn.execute("BEGIN")
+        if tag:
+            rows = db.query("SELECT DISTINCT node_id FROM tags WHERE tag = ?", (db.quote_param(tag),), conn)
+            allowed = {row["node_id"] for row in rows}
+        node_rows = db.query("SELECT id, title, file, level FROM nodes", conn=conn)
+        file_rows = db.query("SELECT file FROM files", conn=conn)
+    finally:
+        conn.close()
     nodes_by_file: dict[str, list[dict]] = {}
-    for row in db.query("SELECT id, title, file, level FROM nodes"):
+    for row in node_rows:
         nodes_by_file.setdefault(row["file"], []).append(row)
 
     found = []
     unreadable = 0
-    for row in db.query("SELECT file FROM files"):
+    for row in file_rows:
         file = row["file"]
         nodes = nodes_by_file.get(file)
         if not nodes:
@@ -171,7 +209,7 @@ def search_text(query: str, limit: int = 20, tag: str | None = None) -> str:
                 found.append((hits, by_id[node_id]["title"] or "", node_id, file, line, snippet))
 
     found.sort(key=lambda r: (-r[0], r[1].lower(), r[1], r[2]))
-    found = found[: max(0, limit)]
+    found = found[:limit]
     if found:
         out = [f'Notes containing "{query}" ({len(found)}):']
         out += [f"{node_id} | {title} | {file}:{line} | {snippet}" for _, title, node_id, file, line, snippet in found]
