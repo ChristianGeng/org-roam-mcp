@@ -110,6 +110,31 @@ class TestCheckSvg:
         covered = offset.replace('<rect x="0" y="0"', '<rect x="-20" y="-20"')
         assert check_svg.check(covered) == []
 
+    def test_viewbox_may_use_plus_signs(self):
+        """SVG numbers may start with +, so "+0 +0 +400 +200" is a valid viewBox."""
+        plus = GOOD.replace('viewBox="0 0 400 200"', 'viewBox="+0 +0 +400 +200"')
+        assert check_svg.check(plus) == []
+
+    def test_card_in_switch_branch_that_may_not_show(self):
+        """A card under a systemLanguage condition may not be shown, so it is not counted."""
+        card = '<rect x="0" y="0" width="400" height="200" fill="#f8fafc"/>'
+        conditional = card.replace("<rect ", '<rect systemLanguage="xx" ')
+        hidden = GOOD.replace(card, "<switch>" + conditional + "</switch>")
+        assert any("background card" in p for p in check_svg.check(hidden))
+
+    def test_card_in_unconditional_switch_branch_passes(self):
+        """The first child of a <switch> without conditions is always shown."""
+        card = '<rect x="0" y="0" width="400" height="200" fill="#f8fafc"/>'
+        shown = GOOD.replace(card, "<switch>" + card + "</switch>")
+        assert check_svg.check(shown) == []
+
+    def test_conditional_branch_before_card_is_not_counted(self):
+        """A conditional child ahead of the card is not the first painted element."""
+        card = '<rect x="0" y="0" width="400" height="200" fill="#f8fafc"/>'
+        cond = '<circle systemLanguage="xx" r="1"/>'
+        svg = GOOD.replace(card, "<switch>" + cond + card + "</switch>")
+        assert check_svg.check(svg) == []
+
     def test_card_drawn_after_the_text_is_reported(self):
         """A card painted after the labels hides them."""
         late = GOOD.replace(

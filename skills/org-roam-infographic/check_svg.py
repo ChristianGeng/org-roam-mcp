@@ -19,7 +19,9 @@ FORBIDDEN_TAGS = {"script", "foreignObject", "image"}
 NOT_DRAWN = {"svg", "title", "desc", "style", "defs", "metadata", "g", "a", "switch"}
 # Containers whose content is a template, painted only where it is used.
 TEMPLATES = {"defs", "symbol", "clipPath", "mask", "marker", "pattern", "linearGradient", "radialGradient", "filter"}
-NUMBER = r"-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
+# Attributes that make a <switch> child conditional.
+CONDITIONS = ("systemLanguage", "requiredExtensions", "requiredFeatures")
+NUMBER = r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
 # One CSS escape: a backslash and 1 to 6 hex digits (and one optional white
 # space), or a backslash and any other character. Read left to right in one
 # pass, so an escaped backslash ("\\\\") stays a backslash.
@@ -94,7 +96,8 @@ def _painted(root: ET.Element) -> list[ET.Element]:
 
     Containers (g, a) and descriptions are left out, and so is everything
     inside a template (defs, symbol, clipPath, ...), which is painted only
-    where it is used.
+    where it is used. Of a <switch> only the first child without conditions
+    counts: a child with systemLanguage or requiredExtensions may not be shown.
     """
     painted = []
 
@@ -104,7 +107,11 @@ def _painted(root: ET.Element) -> list[ET.Element]:
             return
         if name not in NOT_DRAWN:
             painted.append(el)
-        for child in el:
+        children = list(el)
+        if name == "switch":
+            unconditional = [c for c in children if not any(a in c.attrib for a in CONDITIONS)]
+            children = unconditional[:1]
+        for child in children:
             walk(child)
 
     walk(root)
