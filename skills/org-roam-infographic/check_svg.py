@@ -19,7 +19,9 @@ FORBIDDEN_TAGS = {"script", "foreignObject", "image"}
 NOT_DRAWN = {"svg", "title", "desc", "style", "defs", "metadata", "g", "a", "switch"}
 # Containers whose content is a template, painted only where it is used.
 TEMPLATES = {"defs", "symbol", "clipPath", "mask", "marker", "pattern", "linearGradient", "radialGradient", "filter"}
-NUMBER = r"-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
+# Attributes that make a <switch> child conditional.
+CONDITIONS = ("systemLanguage", "requiredExtensions", "requiredFeatures")
+NUMBER = r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
 # One CSS escape: a backslash and 1 to 6 hex digits (and one optional white
 # space), or a backslash and any other character. Read left to right in one
 # pass, so an escaped backslash ("\\\\") stays a backslash.
@@ -89,12 +91,21 @@ def _outside_urls(css: str) -> list[str]:
     return [target for target in URL_IN_CSS.findall(_unescape_css(css)) if not target.strip().startswith("#")]
 
 
+def _conditional_switch(el: ET.Element) -> bool:
+    """Whether a <switch> has a child with systemLanguage, requiredExtensions or requiredFeatures.
+
+    Which child is shown then depends on the viewer, so it cannot be checked.
+    """
+    return _local(el.tag) == "switch" and any(a in child.attrib for child in el for a in CONDITIONS)
+
+
 def _painted(root: ET.Element) -> list[ET.Element]:
     """Return the elements that paint something, in paint order.
 
     Containers (g, a) and descriptions are left out, and so is everything
     inside a template (defs, symbol, clipPath, ...), which is painted only
-    where it is used.
+    where it is used. Of a <switch> without conditions only the first child
+    counts; of one with conditions none does (see _conditional_switch).
     """
     painted = []
 
@@ -104,7 +115,11 @@ def _painted(root: ET.Element) -> list[ET.Element]:
             return
         if name not in NOT_DRAWN:
             painted.append(el)
-        for child in el:
+        children = list(el)
+        if name == "switch":
+            # With conditions the shown child depends on the viewer, so none counts.
+            children = [] if _conditional_switch(el) else children[:1]
+        for child in children:
             walk(child)
 
     walk(root)
@@ -151,6 +166,12 @@ def check(svg_text: str) -> list[str]:
         for attr, value in el.attrib.items():
             for target in _outside_urls(value):
                 problems.append(f"{_local(attr)}= in <{name}> loads url({target}) from outside the file")
+
+    if any(_conditional_switch(el) for el in elements):
+        problems.append(
+            "a <switch> with conditional children cannot be checked; "
+            "draw the background card and the labels outside it"
+        )
 
     if "text" not in tags:
         problems.append("no <text>: labels must be text, not paths")
