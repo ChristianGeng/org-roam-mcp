@@ -151,11 +151,14 @@ class TestSearchText:
         assert [row[0] for row in _rows(search_text('"road ends at the sea"'))] == ["file-travel"]
 
     def test_case_folding_beyond_ascii(self, notes):
-        """İ (which lower-cases to two characters) and final sigma match."""
+        """İ (which lower-cases to two characters), final sigma and ß match."""
         with open(notes["travel.org"], "a", encoding="utf-8") as f:
-            f.write("From İzmir along the ΟΔΟΣ.\n")
+            f.write("From İzmir along the ΟΔΟΣ to the Hauptstraße 5.\n")
         assert [row[0] for row in _rows(search_text("İZMIR"))] == ["file-travel"]
         assert [row[0] for row in _rows(search_text("οδος"))] == ["file-travel"]
+        rows = _rows(search_text("HAUPTSTRASSE"))
+        assert [row[0] for row in rows] == ["file-travel"]
+        assert "**Hauptstraße** 5." in rows[0][3]
 
     def test_no_hit(self, notes):
         """No node contains the word."""

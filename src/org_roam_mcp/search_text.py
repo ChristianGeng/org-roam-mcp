@@ -26,15 +26,10 @@ _GAP = "\n"
 
 
 class _FoldTable(dict):
-    """Map each character to its case-folded form, one character for one."""
+    """Map each character to its case-folded form (ß to ss), and remember it."""
 
     def __missing__(self, code: int) -> str:
-        char = chr(code)
-        folded = char.casefold()
-        if len(folded) != 1:
-            folded = char.lower()
-        if len(folded) != 1:
-            folded = char
+        folded = chr(code).casefold()
         self[code] = folded
         return folded
 
@@ -53,8 +48,15 @@ def parse_query(query: str) -> list[str]:
 
 
 def _fold(text: str) -> str:
-    """Case-fold text without changing its length, so positions stay the same."""
+    """Case-fold text the same way for the query and the notes."""
     return text.translate(_FOLD_TABLE)
+
+
+def _positions(text: str) -> list[int]:
+    """For each position in _fold(text), the position in text it comes from; one more at the end."""
+    positions = [i for i, char in enumerate(text) for _ in _FOLD_TABLE[ord(char)]]
+    positions.append(len(text))
+    return positions
 
 
 def node_lines(text: str, node_ids: set[str], file_node: str | None) -> dict[str, list[tuple[int, str]]]:
@@ -143,6 +145,9 @@ def search_lines(lines: list[tuple[int, str]], terms: list[str]) -> tuple[int, i
         if first is None or at < first[0]:
             first = (at, len(term))
     at, length = first
+    if len(folded) != len(text):
+        positions = _positions(text)
+        at, length = positions[at], positions[at + length - 1] + 1 - positions[at]
     start = max(0, at - max(0, SNIPPET_LENGTH - length) // 2)
     end = min(len(text), start + max(SNIPPET_LENGTH, length))
     start = max(0, min(start, end - SNIPPET_LENGTH))
