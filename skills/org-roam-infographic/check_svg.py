@@ -91,13 +91,21 @@ def _outside_urls(css: str) -> list[str]:
     return [target for target in URL_IN_CSS.findall(_unescape_css(css)) if not target.strip().startswith("#")]
 
 
+def _conditional_switch(el: ET.Element) -> bool:
+    """Whether a <switch> has a child with systemLanguage, requiredExtensions or requiredFeatures.
+
+    Which child is shown then depends on the viewer, so it cannot be checked.
+    """
+    return _local(el.tag) == "switch" and any(a in child.attrib for child in el for a in CONDITIONS)
+
+
 def _painted(root: ET.Element) -> list[ET.Element]:
     """Return the elements that paint something, in paint order.
 
     Containers (g, a) and descriptions are left out, and so is everything
     inside a template (defs, symbol, clipPath, ...), which is painted only
-    where it is used. Of a <switch> only the first child without conditions
-    counts: a child with systemLanguage or requiredExtensions may not be shown.
+    where it is used. Of a <switch> without conditions only the first child
+    counts; of one with conditions none does (see _conditional_switch).
     """
     painted = []
 
@@ -109,8 +117,8 @@ def _painted(root: ET.Element) -> list[ET.Element]:
             painted.append(el)
         children = list(el)
         if name == "switch":
-            unconditional = [c for c in children if not any(a in c.attrib for a in CONDITIONS)]
-            children = unconditional[:1]
+            # With conditions the shown child depends on the viewer, so none counts.
+            children = [] if _conditional_switch(el) else children[:1]
         for child in children:
             walk(child)
 
@@ -158,6 +166,12 @@ def check(svg_text: str) -> list[str]:
         for attr, value in el.attrib.items():
             for target in _outside_urls(value):
                 problems.append(f"{_local(attr)}= in <{name}> loads url({target}) from outside the file")
+
+    if any(_conditional_switch(el) for el in elements):
+        problems.append(
+            "a <switch> with conditional children cannot be checked; "
+            "draw the background card and the labels outside it"
+        )
 
     if "text" not in tags:
         problems.append("no <text>: labels must be text, not paths")
