@@ -17,6 +17,30 @@ Returns:
   - Reinforcement Learning (a-uuid-003)
 ```
 
+### Search the text of the notes
+
+`org_roam_find` looks at titles only. `org_roam_search_text` looks at the
+text: all words must occur in a node, in any order, case ignored; a phrase
+in double quotes counts as one word; `tag` keeps only nodes with that tag.
+
+```
+You: "Where did I write about tomatoes and basil?"
+
+Claude uses: org_roam_search_text("tomatoes basil")
+
+Returns:
+  Notes containing "tomatoes basil" (2):
+  a-uuid-garden | Garden | /notes/garden.org:6 | #+title: Garden The **tomatoes** grow next to the basil. Water the tomatoes in the morning.
+  a-uuid-kitchen | Kitchen | /notes/kitchen.org:6 | #+title: Kitchen A sauce of **tomatoes** and basil, cooked slowly.
+```
+
+Each line is one node: its ID, title, file and the line of the first hit,
+and a snippet of about 120 characters with the hit marked. The node with
+the most hits comes first. A hit under a heading that has its own `:ID:` is
+reported for that heading's node. With
+`org_roam_search_text('"compost heap"', tag="garden")` only the whole phrase
+counts, and only in nodes tagged `garden`.
+
 ### Explore a node's neighborhood
 
 ```
