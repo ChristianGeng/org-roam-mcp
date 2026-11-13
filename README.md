@@ -18,6 +18,7 @@ AI client → MCP server (Python, stdio) → sqlite3 (reads)
 | Tool | Parameters | Purpose |
 |------|------------|---------|
 | `org_roam_find` | `search` | Find nodes by title substring |
+| `org_roam_search_text` | `query, limit=20, tag=None` | Find nodes by the words in their text |
 | `org_roam_read_node` | `node_id` | Read the full file of a node |
 | `org_roam_backlinks` | `node_id` | All nodes that link to a node |
 | `org_roam_bfs` | `node_id, depth=2` | Breadth-first neighbourhood of a node |
@@ -40,6 +41,19 @@ Graph algorithms (networkx; only `id:` links count):
 | `org_roam_graph_stats` | | Density, diameter, components, average degree |
 | `org_roam_suggest_links` | `node_id, limit=10` | Unlinked nodes with many shared neighbours |
 | `org_roam_connected_components` | | Weakly connected subgraphs |
+
+`org_roam_search_text` searches the text of the files in the database:
+all words must occur in a node, in any order, case ignored (ß matches ss),
+and a phrase in double quotes counts as one word. Parts of words match too:
+`tomato` finds `tomatoes`, and `art` finds `party`. It returns one line per node (the heading
+node the hit is under, otherwise the file's node): `id | title | file:line |
+snippet`, with the hit marked as `**hit**`, most hits first. Property
+drawers are not searched. Files that are not UTF-8 are skipped and counted.
+It has no index: each call reads the files once. With 1,000 synthetic notes
+(5 MB) a call took 0.2–0.7 s; with 5,000 (24 MB), 1 s for a rare word and
+about 4 s for a word found in most files. An index (for example SQLite FTS5, as in the
+roam-graph-mobile app) would be worth it when calls get slow with many more
+notes.
 
 Worked examples: [docs/examples.md](docs/examples.md).
 

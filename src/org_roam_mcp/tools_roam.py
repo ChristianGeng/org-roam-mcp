@@ -5,6 +5,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from . import queries
+from . import search_text
 from . import tools_advanced
 from .db import query
 from .db import quote_param
@@ -23,6 +24,26 @@ def register(mcp: FastMCP) -> None:
 
         """
         return query(queries.FIND, (search,))
+
+    @mcp.tool()
+    def org_roam_search_text(query: str, limit: int = 20, tag: str | None = None) -> str:
+        """Find notes whose text contains the words, not only the title.
+
+        All words must occur in the node, in any order; case is ignored (ß
+        matches ss); parts of words match (tomato finds tomatoes); a phrase
+        in double quotes counts as one word. One line per node, most
+        hits first: id | title | file:line | snippet, with the first hit
+        marked as **hit**. A hit under a heading that is its own node belongs
+        to that node, otherwise to the file's node. Property drawers are not
+        searched. Files that cannot be read are counted at the end.
+
+        Args:
+            query: The words to find
+            limit: Number of nodes to return (default 20)
+            tag: Only nodes with this tag (optional)
+
+        """
+        return search_text.search_text(query, limit, tag)
 
     @mcp.tool()
     def org_roam_backlinks(node_id: str) -> list[dict]:
