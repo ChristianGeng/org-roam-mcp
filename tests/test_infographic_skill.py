@@ -241,3 +241,78 @@ class TestCheckSvg:
         out = capsys.readouterr().out
         assert f"{good}: ok" in out
         assert "over 1200 px" in out
+
+
+def _with_labels(labels: str) -> str:
+    """Return GOOD with its label replaced by the given <text> elements."""
+    return GOOD.replace('<text x="20" y="40">A: 3</text>', labels)
+
+
+class TestOverlaps:
+    """check_svg.overlaps() warns about labels that seem to overlap (#19)."""
+
+    def test_labels_at_the_same_place(self):
+        """Two labels at the same place are one warning, with both texts."""
+        warnings, skipped = check_svg.overlaps(
+            _with_labels('<text x="20" y="40">Members</text><text x="20" y="40">Budget</text>')
+        )
+        assert len(warnings) == 1
+        assert "'Members'" in warnings[0] and "'Budget'" in warnings[0]
+        assert skipped == 0
+
+    def test_labels_side_by_side_with_room(self):
+        """Labels next to each other with room between them are fine."""
+        svg = _with_labels('<text x="20" y="40">Members</text><text x="120" y="40">Budget</text>')
+        assert check_svg.overlaps(svg) == ([], 0)
+
+    def test_text_anchor_moves_the_box(self):
+        """An anchor of middle centres the box on x, and end ends it there."""
+        start = '<text x="100" y="40">Members</text>'
+        middle = '<text x="100" y="40" text-anchor="middle">Budget</text>'
+        end = '<text x="100" y="40" style="text-anchor: end">Budget</text>'
+        assert len(check_svg.overlaps(_with_labels(start + middle))[0]) == 1
+        assert check_svg.overlaps(_with_labels(start + end)) == ([], 0)
+
+    def test_translate_on_a_parent_moves_the_box(self):
+        """translate(...) on a parent <g> moves its labels."""
+        apart = '<text x="20" y="40">Members</text><g transform="translate(200)"><text x="20" y="40">Budget</text></g>'
+        assert check_svg.overlaps(_with_labels(apart)) == ([], 0)
+        together = apart.replace("translate(200)", "translate(0, 0) translate(5 2)")
+        assert len(check_svg.overlaps(_with_labels(together))[0]) == 1
+
+    def test_inherited_font_size(self):
+        """A large font size set on a parent <g> makes the box larger."""
+        labels = '<text x="20" y="40">Members</text><text x="20" y="70">Budget</text>'
+        assert check_svg.overlaps(_with_labels(labels)) == ([], 0)
+        large = f'<g font-size="48">{labels}</g>'
+        assert len(check_svg.overlaps(_with_labels(large))[0]) == 1
+
+    def test_rotated_label_is_skipped_and_counted(self):
+        """A rotated label is not checked, and the count says so."""
+        labels = '<text x="20" y="40">Members</text><text x="20" y="40" transform="rotate(-90 20 40)">Budget</text>'
+        assert check_svg.overlaps(_with_labels(labels)) == ([], 1)
+
+    def test_tspans_with_their_own_position_are_lines(self):
+        """<tspan>s with x and dy are separate lines, so they do not overlap each other."""
+        lines = '<text x="20" y="40">First line<tspan x="20" dy="1.2em">Second line</tspan></text>'
+        assert check_svg.overlaps(_with_labels(lines)) == ([], 0)
+        same = lines.replace('dy="1.2em"', 'dy="0"')
+        assert len(check_svg.overlaps(_with_labels(same))[0]) == 1
+
+    def test_warnings_do_not_change_check(self):
+        """check() still returns the structural problems only."""
+        assert check_svg.check(_with_labels('<text x="20" y="40">A</text><text x="20" y="40">B</text>')) == []
+
+    def test_the_documented_example_has_no_overlaps(self):
+        """The example in docs/examples.md has no overlap warnings and no skipped labels."""
+        assert check_svg.overlaps(EXAMPLE_SVG.read_text(encoding="utf-8")) == ([], 0)
+
+    def test_strict_makes_warnings_fail(self, tmp_path, capsys):
+        """A warning prints but exits 0; with --strict it exits 1."""
+        path = tmp_path / "overlap.svg"
+        path.write_text(_with_labels('<text x="20" y="40">A</text><text x="20" y="40">B</text>'), encoding="utf-8")
+        assert check_svg.main([str(path)]) == 0
+        assert check_svg.main(["--strict", str(path)]) == 1
+        out = capsys.readouterr().out
+        assert f"{path}: warning: labels overlap: 'A' and 'B'" in out
+        assert f"{path}: ok" not in out

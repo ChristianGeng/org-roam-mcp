@@ -1,10 +1,12 @@
 """Check an infographic SVG against the rules of the org-roam-infographic skill.
 
-Usage: python check_svg.py FILE.svg [FILE.svg ...]
+Usage: python check_svg.py [--strict] FILE.svg [FILE.svg ...]
 
 Prints one line per problem and exits 1 if there is any, 0 if the file is
-fine. It checks the structure only; rendering the file and looking at it is
-still needed (see SKILL.md, step 4). Uses the standard library only.
+fine. It also warns about text labels that seem to overlap; the sizes of the
+labels are estimates, so a warning alone does not fail, unless --strict is
+given. Rendering the file and looking at it is still needed (see SKILL.md,
+step 4). Uses the standard library only.
 """
 
 import re
@@ -28,6 +30,27 @@ NUMBER = r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
 CSS_ESCAPE = re.compile(r"\\(?:([0-9a-fA-F]{1,6})[ \t\n\r\f]?|(.))", re.DOTALL)
 URL_IN_CSS = re.compile(r"url\(\s*['\"]?([^)'\"]*)", re.IGNORECASE)
 CSS_LOADS = re.compile(r"@import|@font-face", re.IGNORECASE)
+# Estimated label boxes: font size when none is set, average character width
+# as a share of the font size (normal and bold), and the share of the smaller
+# box two boxes may overlap before it is a warning.
+DEFAULT_FONT_SIZE = 16.0
+CHAR_WIDTH = 0.55
+BOLD_CHAR_WIDTH = 0.6
+MAX_OVERLAP = 0.25
+# Top and bottom of the box, in font sizes from the y position, per
+# dominant-baseline. The default is the alphabetic base line.
+BASELINES = {
+    "middle": (-0.5, 0.5),
+    "central": (-0.5, 0.5),
+    "hanging": (0.0, 1.0),
+    "text-before-edge": (0.0, 1.0),
+    "text-top": (0.0, 1.0),
+    "text-after-edge": (-1.0, 0.0),
+    "text-bottom": (-1.0, 0.0),
+    "ideographic": (-1.0, 0.0),
+}
+ALPHABETIC = (-0.8, 0.2)
+TRANSFORM = re.compile(r"\s*([a-zA-Z]+)\s*\(([^)]*)\)\s*,?")
 
 
 def _local(tag: str) -> str:
@@ -190,20 +213,201 @@ def check(svg_text: str) -> list[str]:
     return problems
 
 
-def main(paths: list[str]) -> int:
-    """Check each file; print the problems; return the exit status."""
+def _style(el: ET.Element, name: str) -> str | None:
+    """Return a presentation property of one element, from style= or the attribute."""
+    for part in (el.get("style") or "").split(";"):
+        key, _, value = part.partition(":")
+        if key.strip() == name and value.strip():
+            return value.strip()
+    return el.get(name)
+
+
+def _inherited(chain: list[ET.Element], name: str) -> str | None:
+    """Return a property from the nearest element in chain (innermost last) that sets it."""
+    for el in reversed(chain):
+        value = _style(el, name)
+        if value is not None and value != "inherit":
+            return value
+    return None
+
+
+def _font_size(chain: list[ET.Element]) -> float | None:
+    """Return the font size in px, inherited, or None if it is not a plain length."""
+    value = _inherited(chain, "font-size")
+    return DEFAULT_FONT_SIZE if value is None else _number(value)
+
+
+def _first(value: str | None) -> float | None:
+    """Return the first number of a coordinate list such as "10 20 30", or None."""
+    if value is None:
+        return None
+    parts = re.split(r"[\s,]+", value.strip())
+    return _number(parts[0]) if parts and parts[0] else None
+
+
+def _length(value: str | None, font_size: float) -> float | None:
+    """Read a length that may be in em, such as dy="1.2em"; None if it is not one."""
+    if value is not None and value.strip().endswith("em"):
+        number = _number(value.strip()[:-2])
+        return None if number is None else number * font_size
+    return _first(value)
+
+
+def _translation(chain: list[ET.Element]) -> tuple[float, float] | None:
+    """Add up the translate(...) of the chain; None if any other transform is there."""
+    dx = dy = 0.0
+    for el in chain:
+        value = el.get("transform")
+        if not value:
+            continue
+        position = 0
+        for match in TRANSFORM.finditer(value):
+            if match.start() != position or match.group(1) != "translate":
+                return None
+            numbers = [float(n) for n in re.findall(NUMBER, match.group(2))]
+            if len(numbers) not in (1, 2):
+                return None
+            dx += numbers[0]
+            dy += numbers[1] if len(numbers) == 2 else 0.0
+            position = match.end()
+        if position != len(value):
+            return None
+    return dx, dy
+
+
+def _lines(text: ET.Element, chain: list[ET.Element]) -> list[tuple[str, float, float, list[ET.Element]]] | None:
+    """Split a <text> into lines as (text, x, y, chain of the line's element).
+
+    A <tspan> with its own x or y starts a new line; other text joins the
+    current line. None if a position cannot be read.
+    """
+    x, y = _first(text.get("x") or "0"), _first(text.get("y") or "0")
+    if x is None or y is None:
+        return None
+    lines = [[text.text or "", x, y, chain]]
+
+    def walk(el: ET.Element, el_chain: list[ET.Element]) -> bool:
+        for child in el:
+            child_chain = el_chain + [child]
+            if _local(child.tag) == "tspan" and ("x" in child.attrib or "y" in child.attrib):
+                size = _font_size(child_chain)
+                line_x = _first(child.get("x")) if "x" in child.attrib else lines[-1][1]
+                if "y" in child.attrib:
+                    line_y = _first(child.get("y"))
+                else:
+                    shift = _length(child.get("dy") or "0", size or DEFAULT_FONT_SIZE)
+                    line_y = None if shift is None else lines[-1][2] + shift
+                if line_x is None or line_y is None:
+                    return False
+                lines.append([child.text or "", line_x, line_y, child_chain])
+            else:
+                lines[-1][0] += child.text or ""
+            if not walk(child, child_chain):
+                return False
+            lines[-1][0] += child.tail or ""
+        return True
+
+    if not walk(text, chain):
+        return None
+    return [(" ".join(line[0].split()), line[1], line[2], line[3]) for line in lines]
+
+
+def _box(label: str, x: float, y: float, chain: list[ET.Element]) -> tuple[float, float, float, float] | None:
+    """Estimate the box (left, top, right, bottom) of one line of text; None if it cannot."""
+    size = _font_size(chain)
+    if size is None:
+        return None
+    weight = _inherited(chain, "font-weight") or "normal"
+    bold = weight in ("bold", "bolder") or (weight.isdigit() and int(weight) >= 600)
+    width = len(label) * size * (BOLD_CHAR_WIDTH if bold else CHAR_WIDTH)
+    anchor = _inherited(chain, "text-anchor") or "start"
+    left = x - width / 2 if anchor == "middle" else x - width if anchor == "end" else x
+    top, bottom = BASELINES.get(_style(chain[-1], "dominant-baseline") or "", ALPHABETIC)
+    return left, y + top * size, left + width, y + bottom * size
+
+
+def _short(label: str, limit: int = 30) -> str:
+    """Shorten a label for a message."""
+    return label if len(label) <= limit else label[: limit - 3] + "..."
+
+
+def overlaps(svg_text: str) -> tuple[list[str], int]:
+    """Return the warnings about overlapping labels, and how many labels were not checked.
+
+    The boxes are estimates (see the constants above). A <text> with a
+    rotate, scale, matrix or skew transform, with textLength, or with a
+    position or font size that is not a plain number, is not checked but
+    counted. Returns ([], 0) if the file cannot be read.
+    """
+    try:
+        root = ET.fromstring(svg_text)
+    except ET.ParseError:
+        return [], 0
+    parents = {child: parent for parent in root.iter() for child in parent}
+    boxes, skipped = [], 0
+    for el in _painted(root):
+        if _local(el.tag) != "text":
+            continue
+        chain = [el]
+        while chain[0] in parents:
+            chain.insert(0, parents[chain[0]])
+        shift = _translation(chain)
+        lines = _lines(el, chain)
+        if shift is None or lines is None or any("textLength" in t.attrib for t in el.iter()):
+            skipped += 1
+            continue
+        line_boxes = []
+        for label, x, y, line_chain in lines:
+            if not label:
+                continue
+            box = _box(label, x + shift[0], y + shift[1], line_chain)
+            if box is None:
+                line_boxes = None
+                break
+            line_boxes.append((label, box))
+        if line_boxes is None:
+            skipped += 1
+        else:
+            boxes.extend(line_boxes)
+
+    warnings = []
+    for i, (label_a, a) in enumerate(boxes):
+        for label_b, b in boxes[i + 1 :]:
+            width = min(a[2], b[2]) - max(a[0], b[0])
+            height = min(a[3], b[3]) - max(a[1], b[1])
+            if width <= 0 or height <= 0:
+                continue
+            smaller = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
+            if width * height > MAX_OVERLAP * smaller:
+                warnings.append(f"labels overlap: {_short(label_a)!r} and {_short(label_b)!r}")
+    return warnings, skipped
+
+
+def main(args: list[str]) -> int:
+    """Check each file; print the problems and warnings; return the exit status."""
+    strict = "--strict" in args
+    paths = [arg for arg in args if arg != "--strict"]
     if not paths:
         print(__doc__.strip().splitlines()[2], file=sys.stderr)
         return 2
     status = 0
     for path in paths:
         with open(path, encoding="utf-8") as handle:
-            problems = check(handle.read())
+            svg_text = handle.read()
+        problems = check(svg_text)
+        warnings, skipped = overlaps(svg_text)
         for problem in problems:
             print(f"{path}: {problem}")
-        if problems:
+        for warning in warnings:
+            print(f"{path}: warning: {warning}")
+        if skipped:
+            print(
+                f"{path}: note: {skipped} label(s) not checked for overlap "
+                "(rotate, scale, matrix, skew, textLength, or a position or font size in % or em)"
+            )
+        if problems or (strict and warnings):
             status = 1
-        else:
+        elif not warnings:
             print(f"{path}: ok")
     return status
 

@@ -87,6 +87,13 @@ for example: `Source: org-roam notes reading-circle, club-budget; 2026-11-09`.
   missing `width`, `height`, `viewBox`, `<title>` or `<desc>`, text drawn
   as paths only, a missing or late background card, and a width over
   1200 px.
+- The same check warns about text labels that seem to overlap
+  (`<file>: warning: labels overlap: ...`). It estimates each label's box
+  from its position, anchor and font size, so a warning alone does not
+  fail the check; `--strict` makes it fail. Fix every overlap warning, or
+  tell the user why it is a false alarm. Labels it cannot estimate
+  (rotated, scaled, with `textLength`) are counted in a `note:` line;
+  look at those in the rendered picture.
 - Render the file once and look at it, for example with
   `rsvg-convert -o check.png file.svg`, or with a headless browser:
   `google-chrome --headless=new --screenshot=check.png file.svg`.
