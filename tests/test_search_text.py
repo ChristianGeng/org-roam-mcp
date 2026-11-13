@@ -143,6 +143,12 @@ class TestSearchText:
         assert [row[0] for row in _rows(search_text("lake"))] == ["file-travel"]
         assert [row[0] for row in _rows(search_text("not-a-node"))] == ["file-travel"]
 
+    def test_only_the_same_kind_of_block_ends_a_block(self, notes):
+        """In a src block, #+end_example is text and does not end the block."""
+        with open(notes["travel.org"], "a", encoding="utf-8") as f:
+            f.write("#+begin_src org\n#+end_example\n:PROPERTIES:\n:ID: in-src\n#+end_src\n")
+        assert [row[0] for row in _rows(search_text("in-src"))] == ["file-travel"]
+
     def test_phrase_does_not_go_over_a_child_node(self, notes):
         """The Compost section is between "morning." and "* Plain heading" in the file node."""
         assert _rows(search_text('"morning. * plain heading"')) == []
@@ -204,6 +210,11 @@ class TestSearchLines:
         assert search_lines([(7, "in the morning."), (15, "Seeds here.")], ["morning. seeds"]) is None
         hit = search_lines([(7, "in the morning."), (8, "Seeds here.")], ["morning. seeds"])
         assert hit == (1, 7, "in the **morning. Seeds** here.")
+
+    def test_a_blank_line_after_left_out_lines_keeps_the_gap(self):
+        """Lines 8 to 10 were left out and line 11 is blank: still a gap."""
+        lines = [(7, "in the morning."), (11, ""), (12, "Seeds here.")]
+        assert search_lines(lines, ["morning. seeds"]) is None
 
 
 class TestParseQuery:

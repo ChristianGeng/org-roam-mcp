@@ -18,8 +18,8 @@ _HEADING = re.compile(r"^(\*+)\s")
 _ID_LINE = re.compile(r"^\s*:ID:\s*(\S+)\s*$", re.IGNORECASE)
 _DRAWER_START = re.compile(r"^\s*:PROPERTIES:\s*$", re.IGNORECASE)
 _DRAWER_END = re.compile(r"^\s*:END:\s*$", re.IGNORECASE)
-_BLOCK_START = re.compile(r"^\s*#\+begin_\S", re.IGNORECASE)
-_BLOCK_END = re.compile(r"^\s*#\+end_\S", re.IGNORECASE)
+_BLOCK_START = re.compile(r"^\s*#\+begin_(\S+)", re.IGNORECASE)
+_BLOCK_END = re.compile(r"^\s*#\+end_(\S+)", re.IGNORECASE)
 # Joins lines that are not next to each other (a drawer or a child node was
 # between them). No term contains it, so a phrase cannot match over the gap.
 _GAP = "\n"
@@ -73,14 +73,17 @@ def node_lines(text: str, node_ids: set[str], file_node: str | None) -> dict[str
     heading_ids: dict[int, str] = {}
     heading = -1
     in_drawer = False
-    in_block = False
+    block = None  # The name of the block the line is in, such as "src".
     skipped = set()
     for i, line in enumerate(lines):
         if _HEADING.match(line):
             heading = i
-            in_drawer = in_block = False
-        elif in_block:
-            in_block = not _BLOCK_END.match(line)
+            in_drawer = False
+            block = None
+        elif block:
+            match = _BLOCK_END.match(line)
+            if match and match.group(1).lower() == block:
+                block = None
         elif in_drawer:
             skipped.add(i)
             match = _ID_LINE.match(line)
@@ -90,8 +93,8 @@ def node_lines(text: str, node_ids: set[str], file_node: str | None) -> dict[str
         elif _DRAWER_START.match(line):
             skipped.add(i)
             in_drawer = True
-        elif _BLOCK_START.match(line):
-            in_block = True
+        elif match := _BLOCK_START.match(line):
+            block = match.group(1).lower()
         elif _ID_LINE.match(line):
             skipped.add(i)
 
@@ -124,15 +127,18 @@ def search_lines(lines: list[tuple[int, str]], terms: list[str]) -> tuple[int, i
     starts = []
     numbers = []
     previous = None
+    gap = False
     for number, line in lines:
+        gap = gap or (previous is not None and number != previous + 1)
+        previous = number
         part = " ".join(line.split())
         if part:
             if numbers:
-                text += " " if previous == number - 1 else _GAP
+                text += _GAP if gap else " "
+            gap = False
             starts.append(len(text))
             numbers.append(number)
             text += part
-        previous = number
     folded = _fold(text)
     hits = 0
     first = None
