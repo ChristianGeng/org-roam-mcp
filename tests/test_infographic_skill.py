@@ -345,6 +345,19 @@ class TestOverlaps:
             labels = f'<text x="20" y="40">Members</text><text x="20" y="40">A<tspan {attribute}>B</tspan></text>'
             assert check_svg.overlaps(_with_labels(labels)) == ([], 1)
 
+    def test_the_anchor_of_a_chunk_is_the_one_of_its_first_character(self):
+        """The text-anchor of a <tspan> that holds the chunk's first character moves the chunk."""
+        labels = (
+            '<text x="300" y="40"><tspan text-anchor="end">Members</tspan></text>'
+            '<text x="250" y="40">Budget</text>'
+        )
+        assert len(check_svg.overlaps(_with_labels(labels))[0]) == 1
+
+    def test_an_empty_tspan_does_not_move_the_text(self):
+        """A <tspan> without characters has no effect on the position."""
+        labels = '<text x="20" y="40">AAAA<tspan x="400"/>BBBBBBBB</text><text x="60" y="40">CCCCCC</text>'
+        assert len(check_svg.overlaps(_with_labels(labels))[0]) == 1
+
     def test_warnings_do_not_change_check(self):
         """check() still returns the structural problems only."""
         assert check_svg.check(_with_labels('<text x="20" y="40">A</text><text x="20" y="40">B</text>')) == []

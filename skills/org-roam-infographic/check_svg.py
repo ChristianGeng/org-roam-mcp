@@ -301,6 +301,10 @@ def _chunks(text: ET.Element, chain: list[ET.Element]) -> list[tuple[str, list[B
     chunks: list[dict] = []
 
     def move(el: ET.Element, el_chain: list[ET.Element]) -> bool:
+        # x, y, dx and dy belong to an element's characters: one without
+        # any text neither moves the position nor starts a chunk.
+        if el is not text and not "".join(el.itertext()).strip():
+            return True
         size = _font_size(el_chain)
         if size is None:
             return False
@@ -352,7 +356,8 @@ def _chunks(text: ET.Element, chain: list[ET.Element]) -> list[tuple[str, list[B
         last[0] = last[0].rstrip()
         last[4] = _width(last[0], last[3]) or 0.0
         start, end = pieces[0][1], last[1] + last[4]
-        anchor = _inherited(chunk["chain"], "text-anchor") or "start"
+        # As in SVG 2, the anchor of a chunk is the one of its first character.
+        anchor = _inherited(pieces[0][3], "text-anchor") or "start"
         shift = -(end - start) / 2 if anchor == "middle" else -(end - start) if anchor == "end" else 0.0
         boxes = []
         for label, x, y, el_chain, width in pieces:
