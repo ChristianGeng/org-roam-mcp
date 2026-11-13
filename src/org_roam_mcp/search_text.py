@@ -7,6 +7,7 @@ them once; there is no index.
 from bisect import bisect_right
 from pathlib import Path
 import re
+import unicodedata
 
 from . import db
 
@@ -40,7 +41,7 @@ _FOLD_TABLE = _FoldTable()
 def parse_query(query: str) -> list[str]:
     """Split a query into lower-case terms: words, and phrases in double quotes."""
     terms = []
-    for phrase, word in _TERM.findall(query):
+    for phrase, word in _TERM.findall(unicodedata.normalize("NFC", query)):
         term = _fold(" ".join((phrase or word.strip('"')).split()))
         if term and term not in terms:
             terms.append(term)
@@ -48,7 +49,11 @@ def parse_query(query: str) -> list[str]:
 
 
 def _fold(text: str) -> str:
-    """Case-fold text the same way for the query and the notes."""
+    """Case-fold text the same way for the query and the notes.
+
+    The callers first put both in Unicode NFC, so an accented letter stored as a
+    letter plus a combining accent (common in text from macOS) still matches.
+    """
     return text.translate(_FOLD_TABLE)
 
 
@@ -68,7 +73,9 @@ def node_lines(text: str, node_ids: set[str], file_node: str | None) -> dict[str
     (#+begin_src, #+begin_example, ...) lines are text, not drawers; a
     heading still ends the block, as in Org.
     """
-    lines = text.splitlines()
+    # Not splitlines(): it also breaks at form feed and U+2028, which would
+    # shift the line numbers. read_text already turned CR and CRLF into \n.
+    lines = text.split("\n")
     # The ID of each heading (by its index in lines); -1 is the file level.
     heading_ids: dict[int, str] = {}
     heading = -1
@@ -201,7 +208,7 @@ def search_text(query: str, limit: int = 20, tag: str | None = None) -> str:
         if not nodes:
             continue
         try:
-            text = Path(file).read_text(encoding="utf-8")
+            text = unicodedata.normalize("NFC", Path(file).read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError):
             unreadable += 1
             continue

@@ -29,8 +29,9 @@ def register(mcp: FastMCP) -> None:
     def org_roam_search_text(query: str, limit: int = 20, tag: str | None = None) -> str:
         """Find notes whose text contains the words, not only the title.
 
-        All words must occur in the node, in any order; case is ignored; a
-        phrase in double quotes counts as one word. One line per node, most
+        All words must occur in the node, in any order; case is ignored (ß
+        matches ss); parts of words match (tomato finds tomatoes); a phrase
+        in double quotes counts as one word. One line per node, most
         hits first: id | title | file:line | snippet, with the first hit
         marked as **hit**. A hit under a heading that is its own node belongs
         to that node, otherwise to the file's node. Property drawers are not

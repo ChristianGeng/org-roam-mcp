@@ -43,13 +43,15 @@ Graph algorithms (networkx; only `id:` links count):
 | `org_roam_connected_components` | | Weakly connected subgraphs |
 
 `org_roam_search_text` searches the text of the files in the database:
-all words must occur in a node, in any order, case ignored, and a phrase in
-double quotes counts as one word. It returns one line per node (the heading
+all words must occur in a node, in any order, case ignored (ß matches ss),
+and a phrase in double quotes counts as one word. Parts of words match too:
+`tomato` finds `tomatoes`, and `art` finds `party`. It returns one line per node (the heading
 node the hit is under, otherwise the file's node): `id | title | file:line |
 snippet`, with the hit marked as `**hit**`, most hits first. Property
 drawers are not searched. Files that are not UTF-8 are skipped and counted.
-It has no index: each call reads the files once. With 5,000 synthetic notes (28 MB) a call took
-less than a second. An index (for example SQLite FTS5, as in the
+It has no index: each call reads the files once. With 1,000 synthetic notes
+(5 MB) a call took 0.2–0.7 s; with 5,000 (24 MB), 1 s for a rare word and
+about 4 s for a word found in most files. An index (for example SQLite FTS5, as in the
 roam-graph-mobile app) would be worth it when calls get slow with many more
 notes.
 

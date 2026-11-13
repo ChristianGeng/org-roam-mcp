@@ -166,6 +166,13 @@ class TestSearchText:
         assert [row[0] for row in rows] == ["file-travel"]
         assert "**Hauptstraße** 5." in rows[0][3]
 
+    def test_decomposed_accents_match(self, notes):
+        """A letter plus a combining accent (NFD, as macOS writes) matches the composed letter."""
+        with open(notes["travel.org"], "a", encoding="utf-8") as f:
+            f.write("A cafe\u0301 by the harbour.\n")
+        assert [row[0] for row in _rows(search_text("café"))] == ["file-travel"]
+        assert [row[0] for row in _rows(search_text("cafe\u0301"))] == ["file-travel"]
+
     def test_no_hit(self, notes):
         """No node contains the word."""
         assert search_text("submarine") == "No notes contain: submarine"

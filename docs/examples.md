@@ -20,7 +20,8 @@ Returns:
 ### Search the text of the notes
 
 `org_roam_find` looks at titles only. `org_roam_search_text` looks at the
-text: all words must occur in a node, in any order, case ignored; a phrase
+text: all words must occur in a node, in any order, case ignored (ß
+matches ss); parts of words match too (`tomato` finds `tomatoes`); a phrase
 in double quotes counts as one word; `tag` keeps only nodes with that tag.
 
 ```
