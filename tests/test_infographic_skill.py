@@ -322,6 +322,23 @@ class TestOverlaps:
         label = '<text x="20" y="40">Members: <tspan font-weight="bold">12</tspan> people</text>'
         assert check_svg.overlaps(_with_labels(label)) == ([], 0)
 
+    def test_a_tspan_keeps_the_baseline_of_its_label(self):
+        """dominant-baseline set on the <text> or a parent <g> holds for its <tspan>s too."""
+        plain = '<text x="20" y="40" dominant-baseline="hanging">HelloWorld</text><text x="70" y="32">Other</text>'
+        styled = plain.replace("HelloWorld", 'Hello<tspan font-weight="bold">World</tspan>')
+        assert check_svg.overlaps(_with_labels(styled)) == check_svg.overlaps(_with_labels(plain))
+        first, other = styled.replace(' dominant-baseline="hanging"', "").split("</text>", 1)
+        grouped = f'<g dominant-baseline="hanging">{first}</text></g>{other}'
+        assert check_svg.overlaps(_with_labels(grouped)) == check_svg.overlaps(_with_labels(plain))
+
+    def test_overlap_is_judged_against_whole_labels(self):
+        """A short piece almost covered by another label is no warning if the labels overlap little."""
+        labels = (
+            '<text x="0" y="40"><tspan font-weight="bold">A</tspan>LLLLLLLLLLLLLLL</text>'
+            '<text x="-75" y="40">MMMMMMMMMM</text>'
+        )
+        assert check_svg.overlaps(_with_labels(labels)) == ([], 0)
+
     def test_warnings_do_not_change_check(self):
         """check() still returns the structural problems only."""
         assert check_svg.check(_with_labels('<text x="20" y="40">A</text><text x="20" y="40">B</text>')) == []

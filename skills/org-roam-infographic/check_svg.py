@@ -359,7 +359,7 @@ def _chunks(text: ET.Element, chain: list[ET.Element]) -> list[tuple[str, list[B
             if not label:
                 continue
             size = _font_size(el_chain) or DEFAULT_FONT_SIZE
-            top, bottom = BASELINES.get(_style(el_chain[-1], "dominant-baseline") or "", ALPHABETIC)
+            top, bottom = BASELINES.get(_inherited(el_chain, "dominant-baseline") or "", ALPHABETIC)
             boxes.append((x + shift, y + top * size, x + shift + width, y + bottom * size))
         result.append(("".join(piece[0] for piece in pieces), boxes))
     return result
@@ -401,20 +401,28 @@ def overlaps(svg_text: str) -> tuple[list[str], int]:
                 moved = (box[0] + shift[0], box[1] + shift[1], box[2] + shift[0], box[3] + shift[1])
                 boxes.append((label, moved, chunk))
 
-    warnings, reported = [], set()
-    for i, (label_a, a, chunk_a) in enumerate(boxes):
-        for label_b, b, chunk_b in boxes[i + 1 :]:
+    # Overlap is judged per pair of whole labels (chunks): the overlapping
+    # areas of their pieces are added up and compared with the smaller label.
+    labels: dict[int, str] = {}
+    areas: dict[int, float] = {}
+    for label, box, chunk in boxes:
+        labels[chunk] = label
+        areas[chunk] = areas.get(chunk, 0.0) + (box[2] - box[0]) * (box[3] - box[1])
+    shared: dict[tuple[int, int], float] = {}
+    for i, (_, a, chunk_a) in enumerate(boxes):
+        for _, b, chunk_b in boxes[i + 1 :]:
             # Pieces of one chunk touch each other; that is not an overlap.
-            if chunk_a == chunk_b or (chunk_a, chunk_b) in reported:
+            if chunk_a == chunk_b:
                 continue
             width = min(a[2], b[2]) - max(a[0], b[0])
             height = min(a[3], b[3]) - max(a[1], b[1])
-            if width <= 0 or height <= 0:
-                continue
-            smaller = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
-            if width * height > MAX_OVERLAP * smaller:
-                reported.add((chunk_a, chunk_b))
-                warnings.append(f"labels overlap: {_short(label_a)!r} and {_short(label_b)!r}")
+            if width > 0 and height > 0:
+                pair = (min(chunk_a, chunk_b), max(chunk_a, chunk_b))
+                shared[pair] = shared.get(pair, 0.0) + width * height
+    warnings = []
+    for (chunk_a, chunk_b), area in sorted(shared.items()):
+        if area > MAX_OVERLAP * min(areas[chunk_a], areas[chunk_b]):
+            warnings.append(f"labels overlap: {_short(labels[chunk_a])!r} and {_short(labels[chunk_b])!r}")
     return warnings, skipped
 
 
