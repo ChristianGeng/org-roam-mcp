@@ -275,55 +275,94 @@ def _translation(chain: list[ET.Element]) -> tuple[float, float] | None:
     return dx, dy
 
 
-def _lines(text: ET.Element, chain: list[ET.Element]) -> list[tuple[str, float, float, list[ET.Element]]] | None:
-    """Split a <text> into lines as (text, x, y, chain of the line's element).
-
-    A <tspan> with its own x or y starts a new line; other text joins the
-    current line. None if a position cannot be read.
-    """
-    x, y = _first(text.get("x") or "0"), _first(text.get("y") or "0")
-    if x is None or y is None:
-        return None
-    lines = [[text.text or "", x, y, chain]]
-
-    def walk(el: ET.Element, el_chain: list[ET.Element]) -> bool:
-        for child in el:
-            child_chain = el_chain + [child]
-            if _local(child.tag) == "tspan" and ("x" in child.attrib or "y" in child.attrib):
-                size = _font_size(child_chain)
-                line_x = _first(child.get("x")) if "x" in child.attrib else lines[-1][1]
-                if "y" in child.attrib:
-                    line_y = _first(child.get("y"))
-                else:
-                    shift = _length(child.get("dy") or "0", size or DEFAULT_FONT_SIZE)
-                    line_y = None if shift is None else lines[-1][2] + shift
-                if line_x is None or line_y is None:
-                    return False
-                lines.append([child.text or "", line_x, line_y, child_chain])
-            else:
-                lines[-1][0] += child.text or ""
-            if not walk(child, child_chain):
-                return False
-            lines[-1][0] += child.tail or ""
-        return True
-
-    if not walk(text, chain):
-        return None
-    return [(" ".join(line[0].split()), line[1], line[2], line[3]) for line in lines]
-
-
-def _box(label: str, x: float, y: float, chain: list[ET.Element]) -> tuple[float, float, float, float] | None:
-    """Estimate the box (left, top, right, bottom) of one line of text; None if it cannot."""
+def _width(label: str, chain: list[ET.Element]) -> float | None:
+    """Estimate the width of a piece of text in the font of chain; None if the size is not a plain length."""
     size = _font_size(chain)
     if size is None:
         return None
     weight = _inherited(chain, "font-weight") or "normal"
     bold = weight in ("bold", "bolder") or (weight.isdigit() and int(weight) >= 600)
-    width = len(label) * size * (BOLD_CHAR_WIDTH if bold else CHAR_WIDTH)
-    anchor = _inherited(chain, "text-anchor") or "start"
-    left = x - width / 2 if anchor == "middle" else x - width if anchor == "end" else x
-    top, bottom = BASELINES.get(_style(chain[-1], "dominant-baseline") or "", ALPHABETIC)
-    return left, y + top * size, left + width, y + bottom * size
+    return len(label) * size * (BOLD_CHAR_WIDTH if bold else CHAR_WIDTH)
+
+
+Box = tuple[float, float, float, float]
+
+
+def _chunks(text: ET.Element, chain: list[ET.Element]) -> list[tuple[str, list[Box]]] | None:
+    """Split a <text> into chunks, each as (its text, the boxes of its pieces).
+
+    As in SVG, a current text position is kept: x and y on the <text> or a
+    <tspan> set it, dx and dy move it, and each piece of text moves it on by
+    its estimated width, in its own font. A new chunk starts at every
+    absolute x or y; text-anchor moves the whole chunk. Returns None if a
+    position or font size cannot be read.
+    """
+    position = [0.0, 0.0]
+    chunks: list[dict] = []
+
+    def move(el: ET.Element, el_chain: list[ET.Element]) -> bool:
+        size = _font_size(el_chain)
+        if size is None:
+            return False
+        if el is text or "x" in el.attrib or "y" in el.attrib:
+            chunks.append({"chain": el_chain, "pieces": []})
+        for i, name in enumerate(("x", "y")):
+            if name in el.attrib:
+                value = _first(el.get(name))
+                if value is None:
+                    return False
+                position[i] = value
+        for i, name in enumerate(("dx", "dy")):
+            if name in el.attrib:
+                value = _length(el.get(name), size)
+                if value is None:
+                    return False
+                position[i] += value
+        return True
+
+    def add(label: str | None, el_chain: list[ET.Element]) -> bool:
+        label = re.sub(r"\s+", " ", label or "")
+        if not chunks[-1]["pieces"]:
+            label = label.lstrip()
+        if not label:
+            return True
+        width = _width(label, el_chain)
+        if width is None:
+            return False
+        chunks[-1]["pieces"].append([label, position[0], position[1], el_chain, width])
+        position[0] += width
+        return True
+
+    def walk(el: ET.Element, el_chain: list[ET.Element]) -> bool:
+        if not move(el, el_chain) or not add(el.text, el_chain):
+            return False
+        for child in el:
+            if not walk(child, el_chain + [child]) or not add(child.tail, el_chain):
+                return False
+        return True
+
+    if not walk(text, chain):
+        return None
+    result = []
+    for chunk in chunks:
+        pieces = chunk["pieces"]
+        if not pieces:
+            continue
+        last = pieces[-1]
+        last[0] = last[0].rstrip()
+        last[4] = _width(last[0], last[3]) or 0.0
+        start, end = pieces[0][1], last[1] + last[4]
+        anchor = _inherited(chunk["chain"], "text-anchor") or "start"
+        shift = -(end - start) / 2 if anchor == "middle" else -(end - start) if anchor == "end" else 0.0
+        boxes = []
+        for label, x, y, el_chain, width in pieces:
+            if not label:
+                continue
+            size = _font_size(el_chain) or DEFAULT_FONT_SIZE
+            top, bottom = BASELINES.get(_style(el_chain[-1], "dominant-baseline") or "", ALPHABETIC)
+            boxes.append((x + shift, y + top * size, x + shift + width, y + bottom * size))
+        result.append(("".join(piece[0] for piece in pieces), boxes))
+    return result
 
 
 def _short(label: str, limit: int = 30) -> str:
@@ -352,33 +391,29 @@ def overlaps(svg_text: str) -> tuple[list[str], int]:
         while chain[0] in parents:
             chain.insert(0, parents[chain[0]])
         shift = _translation(chain)
-        lines = _lines(el, chain)
-        if shift is None or lines is None or any("textLength" in t.attrib for t in el.iter()):
+        chunks = _chunks(el, chain)
+        if shift is None or chunks is None or any("textLength" in t.attrib for t in el.iter()):
             skipped += 1
             continue
-        line_boxes = []
-        for label, x, y, line_chain in lines:
-            if not label:
-                continue
-            box = _box(label, x + shift[0], y + shift[1], line_chain)
-            if box is None:
-                line_boxes = None
-                break
-            line_boxes.append((label, box))
-        if line_boxes is None:
-            skipped += 1
-        else:
-            boxes.extend(line_boxes)
+        for label, chunk_boxes in chunks:
+            chunk = len(boxes)
+            for box in chunk_boxes:
+                moved = (box[0] + shift[0], box[1] + shift[1], box[2] + shift[0], box[3] + shift[1])
+                boxes.append((label, moved, chunk))
 
-    warnings = []
-    for i, (label_a, a) in enumerate(boxes):
-        for label_b, b in boxes[i + 1 :]:
+    warnings, reported = [], set()
+    for i, (label_a, a, chunk_a) in enumerate(boxes):
+        for label_b, b, chunk_b in boxes[i + 1 :]:
+            # Pieces of one chunk touch each other; that is not an overlap.
+            if chunk_a == chunk_b or (chunk_a, chunk_b) in reported:
+                continue
             width = min(a[2], b[2]) - max(a[0], b[0])
             height = min(a[3], b[3]) - max(a[1], b[1])
             if width <= 0 or height <= 0:
                 continue
             smaller = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
             if width * height > MAX_OVERLAP * smaller:
+                reported.add((chunk_a, chunk_b))
                 warnings.append(f"labels overlap: {_short(label_a)!r} and {_short(label_b)!r}")
     return warnings, skipped
 

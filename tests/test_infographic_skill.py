@@ -299,6 +299,29 @@ class TestOverlaps:
         same = lines.replace('dy="1.2em"', 'dy="0"')
         assert len(check_svg.overlaps(_with_labels(same))[0]) == 1
 
+    def test_dx_and_dy_move_the_label(self):
+        """The attributes dx and dy move a label even without its own x or y."""
+        below = '<text x="20" y="40">Members</text><text x="20" y="40" dy="40">Budget</text>'
+        assert check_svg.overlaps(_with_labels(below)) == ([], 0)
+        back = '<text x="20" y="40">Members</text><text x="300" y="40" dx="-280">Budget</text>'
+        assert len(check_svg.overlaps(_with_labels(back))[0]) == 1
+
+    def test_a_tspan_with_only_y_goes_on_after_the_text_before_it(self):
+        """A <tspan> with y and no x starts where the text before it ended, not at the line's x."""
+        text = '<text x="20" y="40">FirstLongText<tspan y="80">Second</tspan></text>'
+        assert check_svg.overlaps(_with_labels(text + '<text x="20" y="80">Other</text>')) == ([], 0)
+        assert len(check_svg.overlaps(_with_labels(text + '<text x="150" y="80">Other</text>'))[0]) == 1
+
+    def test_an_inline_tspan_is_measured_in_its_own_font_size(self):
+        """A <tspan> without a position but with a larger font is measured at that size."""
+        labels = '<text x="20" y="40"><tspan font-size="48">Hello</tspan></text><text x="100" y="40">World</text>'
+        assert len(check_svg.overlaps(_with_labels(labels))[0]) == 1
+
+    def test_pieces_of_one_label_do_not_overlap_each_other(self):
+        """Text and <tspan>s on one line touch each other; that is no warning."""
+        label = '<text x="20" y="40">Members: <tspan font-weight="bold">12</tspan> people</text>'
+        assert check_svg.overlaps(_with_labels(label)) == ([], 0)
+
     def test_warnings_do_not_change_check(self):
         """check() still returns the structural problems only."""
         assert check_svg.check(_with_labels('<text x="20" y="40">A</text><text x="20" y="40">B</text>')) == []
