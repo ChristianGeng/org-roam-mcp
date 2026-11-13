@@ -370,6 +370,17 @@ def _short(label: str, limit: int = 30) -> str:
     return label if len(label) <= limit else label[: limit - 3] + "..."
 
 
+def _not_estimated(el: ET.Element) -> bool:
+    """Tell whether a part of a label is laid out in a way the estimate does not follow.
+
+    textLength stretches the text, rotate turns its glyphs, and a transform
+    on a <tspan> (other than none) is not followed either.
+    """
+    if "textLength" in el.attrib or "rotate" in el.attrib:
+        return True
+    return _local(el.tag) == "tspan" and (el.get("transform") or "none").strip() != "none"
+
+
 def overlaps(svg_text: str) -> tuple[list[str], int]:
     """Return the warnings about overlapping labels, and how many labels were not checked.
 
@@ -392,7 +403,7 @@ def overlaps(svg_text: str) -> tuple[list[str], int]:
             chain.insert(0, parents[chain[0]])
         shift = _translation(chain)
         chunks = _chunks(el, chain)
-        if shift is None or chunks is None or any("textLength" in t.attrib for t in el.iter()):
+        if shift is None or chunks is None or any(_not_estimated(t) for t in el.iter()):
             skipped += 1
             continue
         for label, chunk_boxes in chunks:

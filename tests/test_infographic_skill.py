@@ -339,6 +339,12 @@ class TestOverlaps:
         )
         assert check_svg.overlaps(_with_labels(labels)) == ([], 0)
 
+    def test_a_transformed_or_rotated_tspan_is_skipped_and_counted(self):
+        """A <tspan> with a transform, or rotate on its glyphs, makes its label skipped and counted."""
+        for attribute in ('transform="rotate(90)"', 'rotate="30"'):
+            labels = f'<text x="20" y="40">Members</text><text x="20" y="40">A<tspan {attribute}>B</tspan></text>'
+            assert check_svg.overlaps(_with_labels(labels)) == ([], 1)
+
     def test_warnings_do_not_change_check(self):
         """check() still returns the structural problems only."""
         assert check_svg.check(_with_labels('<text x="20" y="40">A</text><text x="20" y="40">B</text>')) == []
