@@ -155,14 +155,17 @@ def node_pieces(
     """Split one node's lines into pieces, as (line of the first word, text).
 
     A piece has at most MAX_WORDS words and, with budget, at most budget
-    tokens as count_tokens counts them word by word (a single longer word is
-    a piece of its own). The pieces are of about equal size. Whitespace is
+    tokens as count_tokens counts them word by word, or estimate_tokens
+    without it (a single longer word is a piece of its own). The pieces are of about equal size. Whitespace is
     collapsed. A node without words gives no piece.
     """
     words = [(number, word) for number, line in lines for word in line.split()]
     if not words:
         return []
-    sizes = count_tokens([word for _, word in words]) if budget is not None and count_tokens else [0] * len(words)
+    # With a budget but no counter, fall back to the estimate (never zero
+    # sizes, which would close a piece after every word).
+    counter = count_tokens or estimate_tokens
+    sizes = counter([word for _, word in words]) if budget is not None else [0] * len(words)
     count = math.ceil(len(words) / MAX_WORDS)
     if budget is not None:
         count = max(count, math.ceil(sum(sizes) / max(budget, 1)))

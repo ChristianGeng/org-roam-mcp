@@ -396,3 +396,11 @@ def test_similar_returns_nothing_for_a_limit_below_one(notes):
         hits, stats = semantic.similar("basil", limit=limit, embedder=FakeEmbedder())
         assert hits == []
         assert stats.embedded == 0
+
+
+def test_a_budget_without_a_counter_uses_the_estimate():
+    """A budget alone gives pieces of about equal size, not one piece per word."""
+    pieces = semantic.node_pieces([(1, "one two three four five six seven eight")], budget=4)
+    assert 1 < len(pieces) < 8
+    assert sum(len(text.split()) for _, text in pieces) == 8
+
