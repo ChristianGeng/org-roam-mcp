@@ -2,11 +2,12 @@
 
 Needs the extra `semantic` (sentence-transformers). The notes are split into
 pieces the way org_roam_search_text sees them: one or more per node (file
-node or heading node with an ID), property drawers left out. Each piece is
-embedded once; the vectors are kept in a SQLite file under the user's cache
-folder, keyed by file, file hash and model, so only new and changed files are
-embedded again. Nothing is sent anywhere; the model is downloaded once from
-Hugging Face.
+node or heading node with an ID), property drawers left out, each short
+enough for the model to read whole. Each piece is embedded once; the vectors
+are kept in a SQLite file under the user's cache folder (readable only by the
+user, as it holds the notes' text), keyed by file, file hash and model, so
+only new and changed files are embedded again. Nothing is sent anywhere; the
+model is downloaded once from Hugging Face.
 """
 
 from collections.abc import Callable
@@ -31,13 +32,23 @@ DEFAULT_MODEL = "intfloat/multilingual-e5-small"
 MODEL_ENV = "ORG_ROAM_MCP_EMBED_MODEL"
 CACHE_ENV = "ORG_ROAM_MCP_CACHE_DIR"
 CACHE_FILE = "semantic.sqlite"
-# A node longer than this is split into pieces of equal size, so each piece
-# has MAX_WORDS / 2 to MAX_WORDS words. e5-small reads at most 512 tokens,
-# about 300-400 words; the rest of a longer piece would be cut off.
+# A node longer than this, or longer than the model reads, is split into
+# pieces of about equal size. The model cuts off what is beyond its limit
+# (max_seq_length: 512 tokens for e5-small, 128 for paraphrase-multilingual-
+# MiniLM-L12-v2), so a piece also has to fit in it with the prefix, the title
+# and the tags; 400 German words are about 660 tokens for e5-small.
 MAX_WORDS = 400
-# Part of every file's hash: a change in how pieces are made embeds all
-# files again.
-PIECES_VERSION = "1"
+# Tokens kept free in every piece: the model's start and end tokens, and a
+# little more because the words are counted one by one.
+RESERVED_TOKENS = 4
+# Without a tokenizer, a word is counted as one token per 3 characters (at
+# least one): more than a multilingual tokenizer makes of German or English.
+CHARS_PER_TOKEN = 3
+# For a model that does not say how much it reads.
+FALLBACK_MAX_TOKENS = 128
+# Part of every file's hash, with the model's limit: a change in how pieces
+# are made embeds all files again.
+PIECES_VERSION = "2"
 BATCH_SIZE = 32
 
 
@@ -56,7 +67,21 @@ class Embedder(Protocol):
     query_prefix: str
     passage_prefix: str
 
+    @property
+    def max_tokens(self) -> int:
+        """The most tokens the model reads of a text (with its start and end tokens)."""
+        ...
+
+    def count_tokens(self, texts: list[str]) -> list[int]:
+        """Return the number of tokens of each text, without start and end tokens."""
+        ...
+
     def encode(self, texts: list[str]) -> np.ndarray: ...
+
+
+def estimate_tokens(texts: list[str]) -> list[int]:
+    """Count the tokens of each text without a tokenizer: per word, one per CHARS_PER_TOKEN characters."""
+    return [sum(math.ceil(len(word) / CHARS_PER_TOKEN) for word in text.split()) for text in texts]
 
 
 class SentenceTransformerEmbedder:
@@ -70,12 +95,26 @@ class SentenceTransformerEmbedder:
         self.passage_prefix = "passage: " if e5 else ""
         self._model = None
 
-    def encode(self, texts: list[str]) -> np.ndarray:
+    def _loaded(self):
         if self._model is None:
             from sentence_transformers import SentenceTransformer
 
             self._model = SentenceTransformer(self.model, device="cpu")
-        vectors = self._model.encode(
+        return self._model
+
+    @property
+    def max_tokens(self) -> int:
+        limit = getattr(self._loaded(), "max_seq_length", None)
+        return limit if isinstance(limit, int) and limit > 0 else FALLBACK_MAX_TOKENS
+
+    def count_tokens(self, texts: list[str]) -> list[int]:
+        tokenizer = getattr(self._loaded(), "tokenizer", None)
+        if tokenizer is None:
+            return estimate_tokens(texts)
+        return [len(ids) for ids in tokenizer(texts, add_special_tokens=False)["input_ids"]]
+
+    def encode(self, texts: list[str]) -> np.ndarray:
+        vectors = self._loaded().encode(
             texts, batch_size=BATCH_SIZE, normalize_embeddings=True, convert_to_numpy=True, show_progress_bar=False
         )
         return np.asarray(vectors, dtype=np.float32)
@@ -108,28 +147,60 @@ class Piece:
     text: str  # Without the title and tags in front; the snippet comes from it.
 
 
-def node_pieces(lines: list[tuple[int, str]]) -> list[tuple[int, str]]:
-    """Split one node's lines into pieces of at most MAX_WORDS words, as (line of the first word, text).
+def node_pieces(
+    lines: list[tuple[int, str]],
+    budget: int | None = None,
+    count_tokens: Callable[[list[str]], list[int]] | None = None,
+) -> list[tuple[int, str]]:
+    """Split one node's lines into pieces, as (line of the first word, text).
 
-    Whitespace is collapsed. A node without words gives no piece.
+    A piece has at most MAX_WORDS words and, with budget, at most budget
+    tokens as count_tokens counts them word by word (a single longer word is
+    a piece of its own). The pieces are of about equal size. Whitespace is
+    collapsed. A node without words gives no piece.
     """
     words = [(number, word) for number, line in lines for word in line.split()]
     if not words:
         return []
+    sizes = count_tokens([word for _, word in words]) if budget is not None and count_tokens else [0] * len(words)
     count = math.ceil(len(words) / MAX_WORDS)
-    size = math.ceil(len(words) / count)
-    return [
-        (words[start][0], " ".join(word for _, word in words[start : start + size]))
-        for start in range(0, len(words), size)
-    ]
+    if budget is not None:
+        count = max(count, math.ceil(sum(sizes) / max(budget, 1)))
+    word_target = math.ceil(len(words) / count)
+    token_target = math.ceil(sum(sizes) / count)
+    pieces: list[list[int]] = [[]]
+    tokens = 0
+    for i, size in enumerate(sizes):
+        current = pieces[-1]
+        full = len(current) >= word_target or (budget is not None and tokens >= token_target)
+        too_long = budget is not None and tokens + size > budget
+        if current and (full or too_long):
+            pieces.append([])
+            tokens = 0
+        pieces[-1].append(i)
+        tokens += size
+    return [(words[piece[0]][0], " ".join(words[i][1] for i in piece)) for piece in pieces]
 
 
-def file_pieces(text: str, nodes: list[dict]) -> list[Piece]:
-    """Return the pieces of one file; nodes are its rows from the nodes table (id, level)."""
+def file_pieces(
+    text: str, nodes: list[dict], embedder: Embedder | None = None, tags: dict[str, list[str]] | None = None
+) -> list[Piece]:
+    """Return the pieces of one file; nodes are its rows from the nodes table (id, level, title).
+
+    With embedder, each piece fits in the model's limit together with the
+    passage prefix and the node's title and tags (see passage).
+    """
     file_node = next((node["id"] for node in nodes if node["level"] == 0), None)
+    by_id = {node["id"]: node for node in nodes}
     pieces = []
-    for node_id, lines in node_lines(text, {node["id"] for node in nodes}, file_node).items():
-        pieces += [Piece(node_id, line, part) for line, part in node_pieces(lines)]
+    for node_id, lines in node_lines(text, set(by_id), file_node).items():
+        budget = count = None
+        if embedder is not None:
+            title = by_id[node_id].get("title") or ""
+            head = embedder.passage_prefix + passage(title, (tags or {}).get(node_id, []), "")
+            budget = embedder.max_tokens - RESERVED_TOKENS - embedder.count_tokens([head])[0]
+            count = embedder.count_tokens
+        pieces += [Piece(node_id, line, part) for line, part in node_pieces(lines, budget, count)]
     return pieces
 
 
@@ -148,7 +219,12 @@ class Cache:
     """The SQLite file with the pieces and their vectors."""
 
     def __init__(self, path: Path):
-        path.parent.mkdir(parents=True, exist_ok=True)
+        # The pieces are the notes' text: the folder and the file are the
+        # user's alone (0700, 0600), also when they were made before.
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(path.parent, 0o700)
+        os.close(os.open(path, os.O_RDWR | os.O_CREAT, 0o600))
+        os.chmod(path, 0o600)
         self.conn = sqlite3.connect(path)
         self.conn.executescript(
             """
@@ -226,6 +302,8 @@ def _roam_rows(tag: str | None) -> tuple[list[dict], list[dict], list[dict], set
         tag_rows = db.query("SELECT node_id, tag FROM tags", conn=conn) if has_tags else []
     finally:
         conn.close()
+    if tag and len(tag) >= 2 and tag.startswith('"') and tag.endswith('"'):
+        tag = tag[1:-1]  # As org_roam_search_text, which takes the tag quoted or not.
     allowed = {row["node_id"] for row in tag_rows if row["tag"] == tag} if tag else None
     return node_rows, file_rows, tag_rows, allowed
 
@@ -236,9 +314,12 @@ def index(
     """Bring the cache up to date with the files of the database and return it.
 
     Returns the open cache, the counts, the nodes by ID, the IDs allowed by
-    tag (None without tag), and the files that are indexed.
+    tag (None without tag), and the files that are indexed. A tag that no
+    node has indexes nothing (no file is read or embedded).
     """
     node_rows, file_rows, tag_rows, allowed = _roam_rows(tag)
+    if allowed is not None and not allowed:
+        return Cache(cache_dir() / CACHE_FILE), IndexStats(), {row["id"]: row for row in node_rows}, allowed, set()
     nodes_by_file: dict[str, list[dict]] = {}
     for row in node_rows:
         nodes_by_file.setdefault(row["file"], []).append(row)
@@ -247,6 +328,8 @@ def index(
         tags.setdefault(row["node_id"], []).append(row["tag"])
 
     stats = IndexStats()
+    # The pieces depend on the model's limit, so it is part of every hash.
+    version = f"{PIECES_VERSION}:{embedder.max_tokens}".encode()
     cache = Cache(cache_dir() / CACHE_FILE)
     try:
         known = cache.hashes(embedder.model)
@@ -265,10 +348,10 @@ def index(
             indexed.add(file)
             # The titles and tags come from the database, so they are part of the hash.
             meta = sorted((n["id"], n["level"], n["title"] or "", sorted(tags.get(n["id"], []))) for n in nodes)
-            hash_ = hashlib.sha1(PIECES_VERSION.encode() + b"\0" + raw + b"\0" + repr(meta).encode()).hexdigest()
+            hash_ = hashlib.sha1(version + b"\0" + raw + b"\0" + repr(meta).encode()).hexdigest()
             if known.get(file) == hash_:
                 continue
-            pieces = file_pieces(text, nodes)
+            pieces = file_pieces(text, nodes, embedder, tags)
             by_id = {node["id"]: node for node in nodes}
             texts = [
                 embedder.passage_prefix + passage(by_id[p.node_id]["title"] or "", tags.get(p.node_id, []), p.text)

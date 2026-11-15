@@ -5,6 +5,7 @@ import importlib.util
 from pathlib import Path
 import re
 import sqlite3
+import stat
 import sys
 import zlib
 
@@ -12,6 +13,7 @@ from mcp.server.fastmcp import FastMCP
 import numpy as np
 import pytest
 
+from org_roam_mcp import search_text
 from org_roam_mcp import semantic
 from org_roam_mcp import tools_roam
 
@@ -20,14 +22,21 @@ SCRIPT = Path(__file__).parent.parent / "scripts" / "compare_search.py"
 
 
 class FakeEmbedder:
-    """Bag of words hashed into 256 dimensions, normalized; remembers every text it embeds."""
+    """Bag of words hashed into 256 dimensions, normalized; remembers every text it embeds.
+
+    It reads max_tokens tokens of a text; a token is a word (split at whitespace).
+    """
 
     query_prefix = "query: "
     passage_prefix = "passage: "
 
-    def __init__(self, model: str = "fake-model"):
+    def __init__(self, model: str = "fake-model", max_tokens: int = 512):
         self.model = model
+        self.max_tokens = max_tokens
         self.texts: list[str] = []
+
+    def count_tokens(self, texts: list[str]) -> list[int]:
+        return [len(text.split()) for text in texts]
 
     def encode(self, texts: list[str]) -> np.ndarray:
         self.texts += texts
@@ -81,6 +90,53 @@ class TestPieces:
         assert pieces["head-compost"].text.startswith("* Compost The compost heap")
         assert "pumpkin" in pieces["file-garden"].text
         assert ":ID:" not in pieces["file-garden"].text and "PROPERTIES" not in pieces["file-garden"].text
+
+    def test_pieces_fit_in_the_token_budget(self):
+        """With a budget, no piece has more tokens than it; a longer word is a piece of its own."""
+        lines = [(1, "aaaa bb cc dddddddddddd ee ff gggg"), (2, "hh ii")]
+
+        def lengths(words):
+            return [len(word) for word in words]
+
+        pieces = semantic.node_pieces(lines, budget=6, count_tokens=lengths)
+        assert " ".join(text for _, text in pieces) == "aaaa bb cc dddddddddddd ee ff gggg hh ii"
+        assert "dddddddddddd" in [text for _, text in pieces]
+        assert all(sum(lengths(text.split())) <= 6 for _, text in pieces if text != "dddddddddddd")
+        assert pieces[-1][0] == 2
+
+    def test_long_node_is_split_to_fit_the_model(self, notes):
+        """Each embedded passage, prefix, title and tags included, fits in the model's limit; no word is lost."""
+        words = [f"word{i}" for i in range(100)]
+        with open(notes["kitchen.org"], "a", encoding="utf-8") as f:
+            f.write(" ".join(words) + "\n")
+        fake = FakeEmbedder(max_tokens=30)
+        semantic.search_similar("tomatoes", embedder=fake)
+        kitchen = [text for text in fake.passages() if text.startswith("passage: Kitchen (food)\n")]
+        assert len(kitchen) >= 4
+        assert all(fake.count_tokens([text])[0] + semantic.RESERVED_TOKENS <= 30 for text in fake.passages())
+        embedded = " ".join(text.split("\n", 1)[1] for text in kitchen).split()
+        assert embedded[-100:] == words
+
+    def test_real_embedder_reads_the_limit_and_tokenizer_of_the_model(self):
+        """max_seq_length is the limit; tokens are counted with the tokenizer, else estimated."""
+
+        class Tokenizer:
+            def __call__(self, texts, add_special_tokens):
+                assert add_special_tokens is False
+                return {"input_ids": [[0] * len(text) for text in texts]}
+
+        class Model:
+            max_seq_length = 128
+            tokenizer = Tokenizer()
+
+        embedder = semantic.SentenceTransformerEmbedder("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+        embedder._model = Model()
+        assert embedder.max_tokens == 128
+        assert embedder.count_tokens(["abc", "Kürbis"]) == [3, 6]
+        Model.tokenizer = None
+        Model.max_seq_length = None
+        assert embedder.max_tokens == semantic.FALLBACK_MAX_TOKENS
+        assert embedder.count_tokens(["Donaudampfschiff ab"]) == [6 + 1]
 
     def test_title_tags_and_prefixes_go_in_front(self, notes):
         """Passages get "passage: ", title and tags; the query gets "query: "."""
@@ -153,6 +209,21 @@ class TestSearchSimilar:
             "No notes to compare with: compost"
         )
 
+    def test_quoted_tag(self, notes):
+        """A tag in double quotes finds what the tag without them finds, as in the text search."""
+        rows = _rows(semantic.search_similar("compost", tag='"food"', embedder=FakeEmbedder()))
+        assert [row[0] for row in rows] == ["file-kitchen"]
+        assert "file-kitchen" in search_text.search_text("basil", tag='"food"')
+
+    def test_tag_without_nodes_embeds_nothing(self, notes, cache):
+        """A tag that no node has returns at once: no file and not the query is embedded."""
+        fake = FakeEmbedder()
+        assert semantic.search_similar("compost", tag="nosuchtag", embedder=fake) == "No notes to compare with: compost"
+        assert fake.texts == []
+        conn = sqlite3.connect(cache)
+        assert conn.execute("SELECT count(*) FROM pieces").fetchone()[0] == 0
+        conn.close()
+
     def test_empty_query(self, notes):
         """A query without words is an error, and nothing is embedded."""
         fake = FakeEmbedder()
@@ -211,6 +282,24 @@ class TestCache:
         again = FakeEmbedder("model-a")
         semantic.search_similar("tomatoes", embedder=again)
         assert again.passages() == []
+
+    def test_another_limit_embeds_everything_again(self, notes):
+        """The pieces depend on the model's limit, so a new limit embeds every file again."""
+        semantic.search_similar("tomatoes", embedder=FakeEmbedder(max_tokens=512))
+        other = FakeEmbedder(max_tokens=64)
+        semantic.search_similar("tomatoes", embedder=other)
+        assert len(other.passages()) == 4
+
+    def test_cache_is_readable_only_by_the_user(self, notes, cache):
+        """The folder is made 0700 and the file 0600; looser ones from before are tightened."""
+        semantic.search_similar("tomatoes", embedder=FakeEmbedder())
+        assert stat.S_IMODE(cache.parent.stat().st_mode) == 0o700
+        assert stat.S_IMODE(cache.stat().st_mode) == 0o600
+        cache.parent.chmod(0o755)
+        cache.chmod(0o644)
+        semantic.search_similar("tomatoes", embedder=FakeEmbedder())
+        assert stat.S_IMODE(cache.parent.stat().st_mode) == 0o700
+        assert stat.S_IMODE(cache.stat().st_mode) == 0o600
 
     def test_files_no_longer_in_the_database_are_dropped(self, notes, cache):
         """A file removed from the database is removed from the cache and not found."""
@@ -307,4 +396,3 @@ def test_similar_returns_nothing_for_a_limit_below_one(notes):
         hits, stats = semantic.similar("basil", limit=limit, embedder=FakeEmbedder())
         assert hits == []
         assert stats.embedded == 0
-

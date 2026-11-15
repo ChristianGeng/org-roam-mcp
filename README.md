@@ -88,16 +88,23 @@ that may install the larger CUDA build of PyTorch, see below.)
   anywhere.
 - **Pieces.** Each node (the file's node, and each heading with its own
   `:ID:`, as in `org_roam_search_text`) is one piece, or several pieces of
-  200–400 words when it is longer, with the node's title and tags in front.
+  about equal size when it is longer, with the node's title and tags in front.
+  A piece has at most 400 words, and it fits whole in what the model reads
+  (its `max_seq_length`: 512 tokens for e5-small, 128 for
+  `paraphrase-multilingual-MiniLM-L12-v2`), counted with the model's
+  tokenizer, prefix, title and tags included; the model would cut off the
+  rest, and 400 German words are about 660 e5 tokens.
   Property drawers are left out. A result is one line per node, most similar
   first: `id | title | file:line | snippet`, where the snippet is the start
   of the node's best piece.
 - **Cache.** The vectors are kept in `$XDG_CACHE_HOME/org-roam-mcp/semantic.sqlite`
   (default `~/.cache/org-roam-mcp/`; `ORG_ROAM_MCP_CACHE_DIR` sets another
-  folder), never in the notes folder. They are keyed by file, a hash of the
-  file (with its titles and tags from the database) and model, so a call
-  embeds only new and changed files; files no longer in the database are
-  dropped. Deleting the file is safe; it is built again.
+  folder), never in the notes folder. It holds the text of the notes, so the
+  folder is made readable only by you (0700) and the file too (0600), also
+  when they were there before. The vectors are keyed by file, a hash of the
+  file (with its titles and tags from the database and the model's limit)
+  and model, so a call embeds only new and changed files; files no longer in
+  the database are dropped. Deleting the file is safe; it is built again.
 - **First call.** It loads the model (about 20 s) and embeds every note,
   which can take minutes and may be longer than the client waits for a
   tool. Run the comparison script once first (below); it fills the same
