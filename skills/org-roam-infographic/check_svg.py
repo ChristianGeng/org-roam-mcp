@@ -145,7 +145,9 @@ INHERITED = {"font-size", "font-weight", "text-anchor", "dominant-baseline", "fo
 ) - {"unicode-bidi", "alignment-baseline", "baseline-shift"}
 # What the all property sets: every property but direction and unicode-bidi
 # (the positions, from CSS, are not followed anyway).
-ALL = tuple(name for name in STYLE_PROPERTIES + UNFOLLOWED if name not in ("direction", "unicode-bidi"))
+# all covers every property it resets, positions included (x, y, dx, dy are
+# CSS properties too), except direction and unicode-bidi, as CSS says.
+ALL = tuple(name for name in STYLE_PROPERTIES + UNFOLLOWED + POSITIONS if name not in ("direction", "unicode-bidi"))
 # Words of the font shorthand before its size, and sizes that are keywords.
 FONT_PREFIX = {
     "normal",
@@ -408,7 +410,8 @@ def _declarations(block: str) -> Declarations:
         elif key == "all":
             found = dict.fromkeys(ALL, plain) if plain in CSS_WIDE or "var(" in plain else {}
         elif key == "font-variant":
-            found = {**dict.fromkeys(FONT_WIDTH[:6], "initial"), key: plain}
+            # A shorthand passes a CSS-wide keyword on to its longhands.
+            found = {**dict.fromkeys(FONT_WIDTH[:6], plain if plain in CSS_WIDE else "initial"), key: plain}
         elif key in STYLE_PROPERTIES or key in UNFOLLOWED or key in POSITIONS:
             found = {key: plain}
         else:

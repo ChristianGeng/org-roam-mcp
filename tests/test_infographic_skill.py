@@ -619,7 +619,10 @@ class TestOverlaps:
         assert len(check_svg.overlaps(_with_labels(labels))[0]) == 1
 
     def test_all_sets_every_property_it_covers(self):
-        """all: initial resets display and the rest; later declarations still win; all: revert or var() is counted."""
+        """all: initial resets display and the rest, positions too, so the label is counted.
+
+        Later declarations still win; all: revert or var() is counted.
+        """
         budget = '<text x="20" y="40">Budget</text>'
         for attrs in (
             'display="none" style="all: initial"',
@@ -629,7 +632,9 @@ class TestOverlaps:
             'display="none" style="all: initial !important; display: none"',
         ):
             labels = f'<text x="20" y="40" {attrs}>Members</text>{budget}'
-            assert len(check_svg.overlaps(_with_labels(labels))[0]) == 1, attrs
+            # Drawn (display reset), but its position comes from CSS (x and y
+            # reset to 0): counted, not measured at x="20" y="40".
+            assert check_svg.overlap_report(_with_labels(labels)) == ([], {"css": 1}), attrs
         for attrs in ('style="all: initial; display: none"', 'style="display: none !important; all: initial"'):
             labels = f'<text x="20" y="40" {attrs}>Members</text>{budget}'
             assert check_svg.overlap_report(_with_labels(labels)) == ([], {}), attrs
@@ -637,9 +642,20 @@ class TestOverlaps:
             labels = f'<text x="20" y="40" {attrs}>Members</text>{budget}'
             assert check_svg.overlap_report(_with_labels(labels)) == ([], {"css": 1}), attrs
         rule = '<style>text { all: initial }</style><text x="20" y="40" display="none">Members</text>'
-        # In a rule it beats the attribute; an all that is not valid is dropped.
+        # In a rule it beats the attribute and applies to both labels; an all
+        # that is not valid is dropped. Both are counted, none measured.
         labels = rule + '<text x="20" y="40" style="all: none">Budget</text>'
-        assert len(check_svg.overlaps(_with_labels(labels))[0]) == 1
+        assert check_svg.overlap_report(_with_labels(labels)) == ([], {"css": 2})
+        # The reviewer's case: all: initial from a rule must not hide an overlap.
+        labels = '<style>text { all: initial }</style><text x="10" y="40">AAAA</text><text x="60" y="40">B</text>'
+        assert check_svg.overlap_report(_with_labels(labels)) == ([], {"css": 2})
+
+    def test_font_variant_passes_css_wide_keywords_to_its_longhands(self):
+        """font-variant: inherit takes the parent's longhands (a guard: the label is counted either way today)."""
+        budget = '<text x="20" y="40">Budget</text>'
+        members = '<text x="20" y="40" style="font-variant: inherit">Members</text>'
+        labels = f'<g style="font-variant-caps: small-caps">{members}</g>{budget}'
+        assert check_svg.overlap_report(_with_labels(labels)) == ([], {"css": 1})
 
     def test_other_width_changing_font_properties_are_skipped_and_counted(self):
         """The font-variant longhands, font-kerning, font-feature-settings, ... are counted, unless without effect."""
