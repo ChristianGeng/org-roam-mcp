@@ -51,6 +51,21 @@ BASELINES = {
 }
 ALPHABETIC = (-0.8, 0.2)
 TRANSFORM = re.compile(r"\s*([a-zA-Z]+)\s*\(([^)]*)\)\s*,?")
+# The properties the estimate reads, from attributes, <style> rules or
+# style= (the font shorthand gives font-size and font-weight).
+STYLE_PROPERTIES = ("font-size", "font-weight", "text-anchor", "dominant-baseline", "transform", "display")
+# Children of a <text> whose content is not drawn.
+NO_TEXT = {"title", "desc", "metadata"}
+# Why a label was not checked for overlap, as the note line says it.
+SKIPPED = {
+    "css-transform": "with a CSS transform",
+    "layout": "with textLength or rotate",
+    "nested-svg": "inside a nested <svg>",
+    "style": "styled by <style> rules that are not read",
+    "textPath": "on a <textPath>",
+    "transform": "with a rotate, scale, matrix or skew transform",
+    "units": "with a position or font size in % or em",
+}
 
 
 def _local(tag: str) -> str:
@@ -213,27 +228,212 @@ def check(svg_text: str) -> list[str]:
     return problems
 
 
-def _style(el: ET.Element, name: str) -> str | None:
-    """Return a presentation property of one element, from style= or the attribute."""
-    for part in (el.get("style") or "").split(";"):
-        key, _, value = part.partition(":")
-        if key.strip() == name and value.strip():
-            return value.strip()
-    return el.get(name)
+Styles = dict[ET.Element, dict[str, str]]
 
 
-def _inherited(chain: list[ET.Element], name: str) -> str | None:
+def _declarations(block: str) -> tuple[dict[str, str], bool]:
+    """Read the properties the estimate uses from a declaration block (style= or a rule).
+
+    The font shorthand gives font-size and font-weight. Later declarations
+    win. Also tells whether any of them is !important.
+    """
+    properties, important = {}, False
+    for part in block.split(";"):
+        key, colon, value = part.partition(":")
+        key, value = key.strip().lower(), value.strip()
+        if not colon or not value:
+            continue
+        plain = re.sub(r"!\s*important\s*$", "", value, flags=re.IGNORECASE).strip()
+        if key == "font":
+            properties.update(_font_shorthand(plain))
+        elif key in STYLE_PROPERTIES:
+            properties[key] = plain
+        else:
+            continue
+        important = important or plain != value
+    return properties, important
+
+
+def _font_shorthand(value: str) -> dict[str, str]:
+    """Read font-size and font-weight from a font shorthand such as "bold 60px/1.2 sans-serif".
+
+    A weight that is not given is normal, as in CSS. A font without a
+    readable size (a system font such as caption) gives its whole value as
+    the size, which is then not a plain length.
+    """
+    if value.lower() in ("inherit", "initial", "unset", "revert"):
+        return {"font-size": value, "font-weight": value}
+    weight = "normal"
+    for token in value.split():
+        size = token.split("/")[0]
+        if token.lower() in ("bold", "bolder", "lighter", "normal") or re.fullmatch(r"[1-9]00", token):
+            weight = token
+        elif re.match(r"[+-]?[0-9.]", size):
+            return {"font-size": size, "font-weight": weight}
+    return {"font-size": value, "font-weight": weight}
+
+
+def _style_rules(css: str) -> list[tuple[str, str, bool]]:
+    """Split CSS into rules, as (selectors, declarations, readable).
+
+    Rules inside @media, @supports and other conditional or layered blocks
+    are not readable: whether and in which order they hold is not followed.
+    Other at-rules (@font-face, @keyframes, ...) style no element.
+    """
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    rules = []
+
+    def split(text: str, readable: bool) -> None:
+        position = 0
+        while (start := text.find("{", position)) >= 0:
+            # A statement such as @import ...; may stand before the selectors.
+            prelude = text[position:start].rsplit(";", 1)[-1].strip()
+            depth, end = 1, start + 1
+            while end < len(text) and depth:
+                depth += {"{": 1, "}": -1}.get(text[end], 0)
+                end += 1
+            body = text[start + 1 : end - 1]
+            if not prelude.startswith("@"):
+                rules.append((prelude, body, readable))
+            elif re.match(
+                r"@(media|supports|container|layer|scope|document)\b",
+                prelude,
+                re.IGNORECASE,
+            ):
+                split(body, False)
+            position = end
+
+    split(css, True)
+    return rules
+
+
+def _compound(selector: str) -> tuple[str | None, set[str], set[str]] | None:
+    """Read a selector made of an element name, classes and ids, such as "text.title" or "#total".
+
+    Returns (element name or None, classes, ids), or None for any other
+    selector (combinators, pseudo-classes, attribute selectors, ...).
+    """
+    match = re.fullmatch(r"\s*(\*|[A-Za-z][\w-]*)?((?:[.#][A-Za-z_-][\w-]*)*)\s*", selector)
+    if not match or not (match.group(1) or match.group(2)):
+        return None
+    tag = None if match.group(1) in (None, "*") else match.group(1)
+    parts = re.findall(r"([.#])([\w-]+)", match.group(2))
+    return (
+        tag,
+        {name for kind, name in parts if kind == "."},
+        {name for kind, name in parts if kind == "#"},
+    )
+
+
+def _subject(selector: str) -> tuple[str | None, set[str], set[str]]:
+    """Return what an element must have to be matched by a selector that is not read.
+
+    Only the last compound counts (the element the rule styles), without
+    its pseudo-classes and attribute selectors; if nothing is left, any
+    element may be matched.
+    """
+    plain = re.sub(r"\[[^\]]*\]|\([^)]*\)", "", selector)
+    plain = re.sub(r":{1,2}[\w-]*", "", plain)
+    last = re.split(r"\s*[>+~]\s*|\s+", plain.strip())[-1]
+    return _compound(last) or (None, set(), set())
+
+
+def _matches(el: ET.Element, compound: tuple[str | None, set[str], set[str]]) -> bool:
+    """Whether an element has the element name, classes and ids of a compound selector."""
+    tag, classes, ids = compound
+    if tag is not None and _local(el.tag) != tag:
+        return False
+    return classes <= set((el.get("class") or "").split()) and ids <= {el.get("id")}
+
+
+def _cascade(
+    root: ET.Element,
+) -> tuple[Styles, dict[ET.Element, set[str]]]:
+    """Find the properties the estimate uses for every element, and why some cannot be followed.
+
+    As in CSS for SVG: presentation attributes count least, then <style>
+    rules (an id before a class before an element name; at equal weight the
+    later rule wins), then style=. Returns the properties per element, and
+    per element a set of reasons not to estimate it: "style" when a rule
+    that is not read may match it, "css-transform" when a CSS transform
+    other than none is set on it.
+    """
+    rules, unread = [], []
+    for style in root.iter():
+        if _local(style.tag) != "style" or not style.text:
+            continue
+        for selectors, body, readable in _style_rules(style.text):
+            properties, important = _declarations(body)
+            if not properties:
+                continue
+            for selector in selectors.split(","):
+                compound = _compound(selector)
+                if readable and not important and compound is not None:
+                    tag, classes, ids = compound
+                    weight = (len(ids), len(classes), 0 if tag is None else 1)
+                    rules.append((weight, len(rules), compound, properties))
+                else:
+                    unread.append(_subject(selector))
+    rules.sort(key=lambda rule: rule[:2])
+
+    styles, reasons = {}, {}
+    for el in root.iter():
+        css = {}
+        for _, _, compound, properties in rules:
+            if _matches(el, compound):
+                css.update(properties)
+        css.update(_declarations(el.get("style") or "")[0])
+        own = {name: el.get(name) for name in STYLE_PROPERTIES if el.get(name) is not None}
+        own.update(css)
+        styles[el] = own
+        reasons[el] = set()
+        if any(_matches(el, subject) for subject in unread):
+            reasons[el].add("style")
+        if (css.get("transform") or "none").strip() != "none":
+            reasons[el].add("css-transform")
+    return styles, reasons
+
+
+def _hidden(el: ET.Element, styles: Styles) -> bool:
+    """Whether an element has display none."""
+    return (styles[el].get("display") or "").strip() == "none"
+
+
+def _drawn(el: ET.Element, styles: Styles) -> list[ET.Element]:
+    """Return el and the elements inside it that draw text.
+
+    <title>, <desc> and <metadata> draw nothing, and an element with
+    display none draws nothing, nor does anything inside it.
+    """
+    drawn = [el]
+    for child in el:
+        if _local(child.tag) not in NO_TEXT and not _hidden(child, styles):
+            drawn += _drawn(child, styles)
+    return drawn
+
+
+def _drawn_text(el: ET.Element, styles: Styles) -> str:
+    """Return the text an element draws: its own and its drawn children's, with all tails."""
+    parts = [el.text or ""]
+    for child in el:
+        if _local(child.tag) not in NO_TEXT and not _hidden(child, styles):
+            parts.append(_drawn_text(child, styles))
+        parts.append(child.tail or "")
+    return "".join(parts)
+
+
+def _inherited(chain: list[ET.Element], name: str, styles: Styles) -> str | None:
     """Return a property from the nearest element in chain (innermost last) that sets it."""
     for el in reversed(chain):
-        value = _style(el, name)
+        value = styles[el].get(name)
         if value is not None and value != "inherit":
             return value
     return None
 
 
-def _font_size(chain: list[ET.Element]) -> float | None:
+def _font_size(chain: list[ET.Element], styles: Styles) -> float | None:
     """Return the font size in px, inherited, or None if it is not a plain length."""
-    value = _inherited(chain, "font-size")
+    value = _inherited(chain, "font-size", styles)
     return DEFAULT_FONT_SIZE if value is None else _number(value)
 
 
@@ -253,12 +453,12 @@ def _length(value: str | None, font_size: float) -> float | None:
     return _first(value)
 
 
-def _translation(chain: list[ET.Element]) -> tuple[float, float] | None:
+def _translation(chain: list[ET.Element], styles: Styles) -> tuple[float, float] | None:
     """Add up the translate(...) of the chain; None if any other transform is there."""
     dx = dy = 0.0
     for el in chain:
-        value = el.get("transform")
-        if not value:
+        value = (styles[el].get("transform") or "").strip()
+        if not value or value == "none":
             continue
         position = 0
         for match in TRANSFORM.finditer(value):
@@ -275,12 +475,12 @@ def _translation(chain: list[ET.Element]) -> tuple[float, float] | None:
     return dx, dy
 
 
-def _width(label: str, chain: list[ET.Element]) -> float | None:
+def _width(label: str, chain: list[ET.Element], styles: Styles) -> float | None:
     """Estimate the width of a piece of text in the font of chain; None if the size is not a plain length."""
-    size = _font_size(chain)
+    size = _font_size(chain, styles)
     if size is None:
         return None
-    weight = _inherited(chain, "font-weight") or "normal"
+    weight = _inherited(chain, "font-weight", styles) or "normal"
     bold = weight in ("bold", "bolder") or (weight.isdigit() and int(weight) >= 600)
     return len(label) * size * (BOLD_CHAR_WIDTH if bold else CHAR_WIDTH)
 
@@ -288,14 +488,15 @@ def _width(label: str, chain: list[ET.Element]) -> float | None:
 Box = tuple[float, float, float, float]
 
 
-def _chunks(text: ET.Element, chain: list[ET.Element]) -> list[tuple[str, list[Box]]] | None:
+def _chunks(text: ET.Element, chain: list[ET.Element], styles: Styles) -> list[tuple[str, list[Box]]] | None:
     """Split a <text> into chunks, each as (its text, the boxes of its pieces).
 
     As in SVG, a current text position is kept: x and y on the <text> or a
     <tspan> set it, dx and dy move it, and each piece of text moves it on by
     its estimated width, in its own font. A new chunk starts at every
-    absolute x or y; text-anchor moves the whole chunk. Returns None if a
-    position or font size cannot be read.
+    absolute x or y; text-anchor moves the whole chunk. Children that draw
+    nothing (see _drawn) are left out, but the text after them is not.
+    Returns None if a position or font size cannot be read.
     """
     position = [0.0, 0.0]
     chunks: list[dict] = []
@@ -303,9 +504,9 @@ def _chunks(text: ET.Element, chain: list[ET.Element]) -> list[tuple[str, list[B
     def move(el: ET.Element, el_chain: list[ET.Element]) -> bool:
         # x, y, dx and dy belong to an element's characters: one without
         # any text neither moves the position nor starts a chunk.
-        if el is not text and not "".join(el.itertext()).strip():
+        if el is not text and not _drawn_text(el, styles).strip():
             return True
-        size = _font_size(el_chain)
+        size = _font_size(el_chain, styles)
         if size is None:
             return False
         if el is text or "x" in el.attrib or "y" in el.attrib:
@@ -330,7 +531,7 @@ def _chunks(text: ET.Element, chain: list[ET.Element]) -> list[tuple[str, list[B
             label = label.lstrip()
         if not label:
             return True
-        width = _width(label, el_chain)
+        width = _width(label, el_chain, styles)
         if width is None:
             return False
         chunks[-1]["pieces"].append([label, position[0], position[1], el_chain, width])
@@ -341,7 +542,8 @@ def _chunks(text: ET.Element, chain: list[ET.Element]) -> list[tuple[str, list[B
         if not move(el, el_chain) or not add(el.text, el_chain):
             return False
         for child in el:
-            if not walk(child, el_chain + [child]) or not add(child.tail, el_chain):
+            drawn = _local(child.tag) not in NO_TEXT and not _hidden(child, styles)
+            if (drawn and not walk(child, el_chain + [child])) or not add(child.tail, el_chain):
                 return False
         return True
 
@@ -354,17 +556,17 @@ def _chunks(text: ET.Element, chain: list[ET.Element]) -> list[tuple[str, list[B
             continue
         last = pieces[-1]
         last[0] = last[0].rstrip()
-        last[4] = _width(last[0], last[3]) or 0.0
+        last[4] = _width(last[0], last[3], styles) or 0.0
         start, end = pieces[0][1], last[1] + last[4]
         # As in SVG 2, the anchor of a chunk is the one of its first character.
-        anchor = _inherited(pieces[0][3], "text-anchor") or "start"
+        anchor = _inherited(pieces[0][3], "text-anchor", styles) or "start"
         shift = -(end - start) / 2 if anchor == "middle" else -(end - start) if anchor == "end" else 0.0
         boxes = []
         for label, x, y, el_chain, width in pieces:
             if not label:
                 continue
-            size = _font_size(el_chain) or DEFAULT_FONT_SIZE
-            top, bottom = BASELINES.get(_inherited(el_chain, "dominant-baseline") or "", ALPHABETIC)
+            size = _font_size(el_chain, styles) or DEFAULT_FONT_SIZE
+            top, bottom = BASELINES.get(_inherited(el_chain, "dominant-baseline", styles) or "", ALPHABETIC)
             boxes.append((x + shift, y + top * size, x + shift + width, y + bottom * size))
         result.append(("".join(piece[0] for piece in pieces), boxes))
     return result
@@ -375,46 +577,76 @@ def _short(label: str, limit: int = 30) -> str:
     return label if len(label) <= limit else label[: limit - 3] + "..."
 
 
-def _not_estimated(el: ET.Element) -> bool:
-    """Tell whether a part of a label is laid out in a way the estimate does not follow.
+def _not_estimated(
+    chain: list[ET.Element],
+    drawn: list[ET.Element],
+    styles: Styles,
+    reasons: dict[ET.Element, set[str]],
+) -> str | None:
+    """Tell why a label is laid out in a way the estimate does not follow; None if it is not.
 
-    textLength stretches the text, rotate turns its glyphs, and a transform
-    on a <tspan> (other than none) is not followed either.
+    chain is the <text> with its parents, drawn the <text> with the
+    elements inside it that draw text. The answer is a key of SKIPPED.
     """
-    if "textLength" in el.attrib or "rotate" in el.attrib:
-        return True
-    return _local(el.tag) == "tspan" and (el.get("transform") or "none").strip() != "none"
+    elements = chain + drawn[1:]
+    if any(_local(el.tag) == "svg" for el in chain[1:]):
+        return "nested-svg"
+    if any("style" in reasons[el] for el in elements):
+        return "style"
+    if any(_local(el.tag) == "textPath" for el in drawn):
+        return "textPath"
+    if any("css-transform" in reasons[el] for el in elements):
+        return "css-transform"
+    if any("textLength" in el.attrib or "rotate" in el.attrib for el in drawn):
+        return "layout"
+    # A transform on a <tspan> (other than none) is not followed either.
+    if any((styles[el].get("transform") or "none").strip() != "none" for el in drawn[1:]):
+        return "transform"
+    return None
 
 
-def overlaps(svg_text: str) -> tuple[list[str], int]:
-    """Return the warnings about overlapping labels, and how many labels were not checked.
+def overlap_report(svg_text: str) -> tuple[list[str], dict[str, int]]:
+    """Return the warnings about overlapping labels, and how many labels were not checked, per reason.
 
-    The boxes are estimates (see the constants above). A <text> with a
-    rotate, scale, matrix or skew transform, with textLength, or with a
-    position or font size that is not a plain number, is not checked but
-    counted. Returns ([], 0) if the file cannot be read.
+    The reasons are the keys of SKIPPED. A <text> that is not drawn
+    (display none on it or on a parent) is neither checked nor counted.
+    Returns ([], {}) if the file cannot be read.
     """
     try:
         root = ET.fromstring(svg_text)
     except ET.ParseError:
-        return [], 0
+        return [], {}
+    styles, reasons = _cascade(root)
     parents = {child: parent for parent in root.iter() for child in parent}
-    boxes, skipped = [], 0
+    boxes, skipped = [], {}
     for el in _painted(root):
         if _local(el.tag) != "text":
             continue
         chain = [el]
         while chain[0] in parents:
             chain.insert(0, parents[chain[0]])
-        shift = _translation(chain)
-        chunks = _chunks(el, chain)
-        if shift is None or chunks is None or any(_not_estimated(t) for t in el.iter()):
-            skipped += 1
+        if any(_hidden(link, styles) for link in chain):
+            continue
+        reason = _not_estimated(chain, _drawn(el, styles), styles, reasons)
+        shift = chunks = None
+        if reason is None:
+            shift = _translation(chain, styles)
+            reason = "transform" if shift is None else None
+        if reason is None:
+            chunks = _chunks(el, chain, styles)
+            reason = "units" if chunks is None else None
+        if reason is not None:
+            skipped[reason] = skipped.get(reason, 0) + 1
             continue
         for label, chunk_boxes in chunks:
             chunk = len(boxes)
             for box in chunk_boxes:
-                moved = (box[0] + shift[0], box[1] + shift[1], box[2] + shift[0], box[3] + shift[1])
+                moved = (
+                    box[0] + shift[0],
+                    box[1] + shift[1],
+                    box[2] + shift[0],
+                    box[3] + shift[1],
+                )
                 boxes.append((label, moved, chunk))
 
     # Overlap is judged per pair of whole labels (chunks): the overlapping
@@ -442,6 +674,17 @@ def overlaps(svg_text: str) -> tuple[list[str], int]:
     return warnings, skipped
 
 
+def overlaps(svg_text: str) -> tuple[list[str], int]:
+    """Return the warnings about overlapping labels, and how many labels were not checked.
+
+    The boxes are estimates (see the constants above). Labels the estimate
+    does not follow (see SKIPPED) are not checked but counted. Returns
+    ([], 0) if the file cannot be read.
+    """
+    warnings, skipped = overlap_report(svg_text)
+    return warnings, sum(skipped.values())
+
+
 def main(args: list[str]) -> int:
     """Check each file; print the problems and warnings; return the exit status."""
     strict = "--strict" in args
@@ -454,16 +697,14 @@ def main(args: list[str]) -> int:
         with open(path, encoding="utf-8") as handle:
             svg_text = handle.read()
         problems = check(svg_text)
-        warnings, skipped = overlaps(svg_text)
+        warnings, skipped = overlap_report(svg_text)
         for problem in problems:
             print(f"{path}: {problem}")
         for warning in warnings:
             print(f"{path}: warning: {warning}")
         if skipped:
-            print(
-                f"{path}: note: {skipped} label(s) not checked for overlap "
-                "(rotate, scale, matrix, skew, textLength, or a position or font size in % or em)"
-            )
+            kinds = ", ".join(f"{count} {SKIPPED[reason]}" for reason, count in sorted(skipped.items()))
+            print(f"{path}: note: {sum(skipped.values())} label(s) not checked for overlap: {kinds}")
         if problems or (strict and warnings):
             status = 1
         elif not warnings:

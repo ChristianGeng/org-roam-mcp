@@ -363,8 +363,124 @@ class TestOverlaps:
         assert check_svg.check(_with_labels('<text x="20" y="40">A</text><text x="20" y="40">B</text>')) == []
 
     def test_the_documented_example_has_no_overlaps(self):
-        """The example in docs/examples.md has no overlap warnings and no skipped labels."""
-        assert check_svg.overlaps(EXAMPLE_SVG.read_text(encoding="utf-8")) == ([], 0)
+        """The example in docs/examples.md, sized by class rules, has no overlap warnings and no skipped labels."""
+        svg = EXAMPLE_SVG.read_text(encoding="utf-8")
+        assert check_svg.overlaps(svg) == ([], 0)
+        styles, _ = check_svg._cascade(check_svg.ET.fromstring(svg))
+        title = next(el for el in styles if el.get("class") == "title")
+        assert styles[title]["font-size"] == "22px" and styles[title]["font-weight"] == "700"
+
+    def test_style_rules_set_size_weight_and_anchor(self):
+        """Class, id and element rules in <style>, and the font shorthand, are read."""
+        members, budget = '<text{} x="20" y="40">Members</text>', '<text x="200" y="40">Budget</text>'
+        assert check_svg.overlaps(_with_labels(members.format("") + budget)) == ([], 0)
+        for rule, attribute in (
+            (".big { font-size: 60px }", ' class="big"'),
+            ("#big { font-size: 60px }", ' id="big"'),
+            ("text { font-size: 60px }", ""),
+            (".a, .big { font: bold 60px/1.2 sans-serif }", ' class="big"'),
+        ):
+            labels = f"<style>{rule}</style>" + members.format(attribute) + budget
+            assert len(check_svg.overlaps(_with_labels(labels))[0]) == 1, rule
+        in_style = members.format(' style="font: bold 60px sans-serif"') + budget
+        assert len(check_svg.overlaps(_with_labels(in_style))[0]) == 1
+        anchored = '<style>.r { text-anchor: end }</style><text class="r" x="100" y="40">Members</text>'
+        assert len(check_svg.overlaps(_with_labels(anchored + '<text x="60" y="40">Budget</text>'))[0]) == 1
+        assert check_svg.overlaps(_with_labels(anchored + '<text x="110" y="40">Budget</text>')) == ([], 0)
+
+    def test_style_rule_precedence(self):
+        """style= wins over rules, rules over attributes; id over class over element; then the later rule."""
+        budget = '<text x="200" y="40">Budget</text>'
+        cases = {
+            # (rules, attributes of the first label): whether it is 60 px, so overlaps Budget
+            ("text { font-size: 10px }", 'font-size="60"'): False,
+            ("#a { font-size: 60px } .b { font-size: 10px } text { font-size: 10px }", 'id="a" class="b"'): True,
+            ("#a { font-size: 10px }", 'id="a" style="font-size: 60px"'): True,
+            (".a { font-size: 10px } .b { font-size: 60px }", 'class="b a"'): True,
+            (".b { font-size: 60px } .a { font-size: 10px }", 'class="b a"'): False,
+            ("text.a { font-size: 60px } .a { font-size: 10px }", 'class="a"'): True,
+        }
+        for (rules, attributes), overlap in cases.items():
+            labels = f'<style>{rules}</style><text {attributes} x="20" y="40">Members</text>{budget}'
+            assert len(check_svg.overlaps(_with_labels(labels))[0]) == int(overlap), (rules, attributes)
+
+    def test_labels_styled_by_rules_that_are_not_read_are_skipped_and_counted(self):
+        """Rules with combinators, pseudo-classes, attribute selectors, @media or !important are not guessed."""
+        label = '<g class="c"><text class="x" x="20" y="40">Members</text></g>'
+        for rule in (
+            ".c text { font-size: 60px }",
+            ".c > .x { font-weight: bold }",
+            "text:first-child { text-anchor: end }",
+            '[class="x"] { dominant-baseline: hanging }',
+            "@media (min-width: 1px) { .x { font-size: 60px } }",
+            ".x { font-size: 60px !important }",
+            "g.c * { transform: rotate(90deg) }",
+        ):
+            assert check_svg.overlap_report(_with_labels(f"<style>{rule}</style>{label}")) == ([], {"style": 1}), rule
+        # Rules that set nothing the estimate uses, or cannot match the label, change nothing.
+        for rule in (".c text { fill: red }", "rect:hover { font-size: 60px }", ".bar.last { fill: red }"):
+            assert check_svg.overlaps(_with_labels(f"<style>{rule}</style>{label}")) == ([], 0), rule
+
+    def test_a_css_transform_is_skipped_and_counted(self):
+        """A CSS transform other than none, in style= or a rule, makes its label skipped and counted."""
+        members = '<text x="20" y="40">Members</text>'
+        for budget in (
+            '<text x="20" y="40" style="transform: rotate(90deg); transform-origin: 20px 40px">Budget</text>',
+            '<text x="20" y="40" style="transform: translate(200px)">Budget</text>',
+            '<style>.t { transform: scale(2) }</style><g class="t"><text x="20" y="40">Budget</text></g>',
+        ):
+            assert check_svg.overlap_report(_with_labels(members + budget)) == ([], {"css-transform": 1}), budget
+        none = '<text x="20" y="40" style="transform: none">Budget</text>'
+        assert len(check_svg.overlaps(_with_labels(members + none))[0]) == 1
+
+    def test_a_label_in_a_nested_svg_is_skipped_and_counted(self):
+        """A nested <svg> with x, y or a viewBox moves its labels, which is not followed."""
+        labels = '<svg x="400"><text x="20" y="40">Budget</text></svg><text x="20" y="40">Members</text>'
+        assert check_svg.overlap_report(_with_labels(labels)) == ([], {"nested-svg": 1})
+
+    def test_title_desc_and_metadata_in_a_label_are_not_measured(self):
+        """<title>, <desc> and <metadata> inside a <text> draw nothing; the text after them does."""
+        for child in ("title", "desc", "metadata"):
+            tooltip = f'<text x="20" y="40"><{child}>A very long tooltip text here</{child}>Hi</text>'
+            assert check_svg.overlaps(_with_labels(tooltip + '<text x="80" y="40">Budget</text>')) == ([], 0)
+            assert len(check_svg.overlaps(_with_labels(tooltip + '<text x="25" y="40">Budget</text>'))[0]) == 1
+
+    def test_hidden_labels_are_neither_checked_nor_counted(self):
+        """A display of none on a label, a parent or a <tspan>, set any way, draws nothing."""
+        budget = '<text x="20" y="40">Budget</text>'
+        for hidden in (
+            '<text x="20" y="40" display="none">Members</text>',
+            '<text x="20" y="40" style="display: none">Members</text>',
+            '<style>.h { display: none }</style><text class="h" x="20" y="40">Members</text>',
+            '<g display="none"><text x="20" y="40">Members</text></g>',
+            '<text x="20" y="40"><tspan display="none">Members</tspan></text>',
+        ):
+            assert check_svg.overlap_report(_with_labels(hidden + budget)) == ([], {}), hidden
+        partly = '<text x="20" y="40"><tspan display="none">Long hidden text</tspan>Hi</text>'
+        assert check_svg.overlaps(_with_labels(partly + '<text x="60" y="40">Budget</text>')) == ([], 0)
+
+    def test_a_text_path_is_skipped_and_counted(self):
+        """Text on a <textPath> is laid out along the path, which is not followed."""
+        labels = (
+            '<path id="p" d="M20 40 L300 40"/><text><textPath href="#p">Budget</textPath></text>'
+            '<text x="20" y="40">Members</text>'
+        )
+        assert check_svg.overlap_report(_with_labels(labels)) == ([], {"textPath": 1})
+
+    def test_the_note_says_what_was_skipped(self, tmp_path, capsys):
+        """The note line counts the labels not checked, per kind."""
+        labels = (
+            '<svg x="400"><text x="20" y="40">A</text></svg>'
+            '<text x="20" y="40" transform="rotate(90)">B</text><text x="20" y="80" transform="scale(2)">C</text>'
+        )
+        path = tmp_path / "skipped.svg"
+        path.write_text(_with_labels(labels), encoding="utf-8")
+        assert check_svg.main([str(path)]) == 0
+        out = capsys.readouterr().out
+        assert (
+            f"{path}: note: 3 label(s) not checked for overlap: "
+            "1 inside a nested <svg>, 2 with a rotate, scale, matrix or skew transform"
+        ) in out
 
     def test_strict_makes_warnings_fail(self, tmp_path, capsys):
         """A warning prints but exits 0; with --strict it exits 1."""
