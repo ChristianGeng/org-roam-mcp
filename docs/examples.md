@@ -42,6 +42,31 @@ reported for that heading's node. With
 `org_roam_search_text('"compost heap"', tag="garden")` only the whole phrase
 counts, and only in nodes tagged `garden`.
 
+### Search by meaning
+
+With the extra `semantic` installed, `org_roam_search_similar` finds notes
+that are about the question even when they use other words, or another
+language. It never sends the notes anywhere.
+
+```
+You: "What did I note about keeping plants watered?"
+
+Claude uses: org_roam_search_similar("keeping plants watered", limit=3)
+
+Returns:
+  Notes similar to "keeping plants watered" (3):
+  a-uuid-garden | Garden | /notes/garden.org:4 | #+title: Garden The tomatoes grow next to the basil. Water the tomatoes in the morning.
+  a-uuid-balkon | Balkon | /notes/balkon.org:4 | #+title: Balkon Die Geranien brauchen im Sommer jeden Abend Wasser.
+  a-uuid-compost | Compost | /notes/garden.org:9 | * Compost The compost heap needs brown leaves and green cuttings.
+```
+
+The text search would need every word (`keeping`, `plants`, `watered`) in
+one node and finds none of these. The lines have the same form as in the
+text search; the snippet is the start of the part of the note that matched
+best, and the most similar node comes first. `tag="garden"` keeps only nodes
+with that tag. The first call embeds all notes and takes a while; later
+calls embed only the files that changed.
+
 ### Explore a node's neighborhood
 
 ```
