@@ -63,20 +63,50 @@ INITIAL = {
     "transform": "none",
     "display": "inline",
 }
-# Properties that change where or whether text is drawn in ways the estimate
-# does not follow; a label with one of them set (to a value not in NO_EFFECT)
-# is skipped and counted. The first ones are also presentation attributes.
+# Properties that change where, whether or how wide text is drawn in ways
+# the estimate does not follow; a label with one of them set (to a value not
+# in NO_EFFECT) is skipped and counted. The first ones are also presentation
+# attributes.
 UNFOLLOWED_ATTRIBUTES = (
     "letter-spacing",
     "word-spacing",
     "writing-mode",
     "direction",
     "unicode-bidi",
+    "alignment-baseline",
     "baseline-shift",
     "visibility",
+    "font-stretch",
+    "font-variant",
+    "font-size-adjust",
+    "white-space",
 )
-UNFOLLOWED = UNFOLLOWED_ATTRIBUTES + ("rotate", "scale", "translate")
-NO_EFFECT = {"normal", "0", "0px", "none", "auto", "visible", "ltr", "baseline", "horizontal-tb", "inherit"}
+UNFOLLOWED = UNFOLLOWED_ATTRIBUTES + ("rotate", "scale", "translate", "text-transform")
+NO_EFFECT = {
+    "normal",
+    "0",
+    "0px",
+    "100%",
+    "none",
+    "auto",
+    "visible",
+    "ltr",
+    "baseline",
+    "horizontal-tb",
+    "nowrap",
+    "inherit",
+}
+# The positions of a label, which SVG 2 also takes as CSS properties. As
+# attributes they are read; set from CSS, to any value, they are not followed.
+POSITIONS = ("x", "y", "dx", "dy")
+# The keywords the estimate follows, per property it reads; any other value
+# (one that is not valid, or one such as dominant-baseline: mathematical) is
+# not followed. A font-weight may also be a number from 1 to 1000.
+KEYWORDS = {
+    "text-anchor": {"start", "middle", "end"},
+    "dominant-baseline": {"auto", "alphabetic"}.union(BASELINES),
+    "font-weight": {"normal", "bold", "bolder", "lighter"},
+}
 INHERITED = {"font-size", "font-weight", "text-anchor", "dominant-baseline"}.union(UNFOLLOWED_ATTRIBUTES)
 # Words of the font shorthand before its size, and sizes that are keywords.
 FONT_PREFIX = {
@@ -123,7 +153,10 @@ SCREEN_MEDIA = {"", "all", "screen"}
 NO_TEXT = {"title", "desc", "metadata"}
 # Why a label was not checked for overlap, as the note line says it.
 SKIPPED = {
-    "css": "with CSS the estimate does not follow (var(), revert, letter-spacing, writing-mode, visibility, ...)",
+    "css": (
+        "with CSS the estimate does not follow "
+        "(var(), revert, a value it does not know, letter-spacing, font-stretch, writing-mode, visibility, ...)"
+    ),
     "css-transform": "with a CSS transform",
     "layout": "with textLength or rotate",
     "nested-svg": "inside a nested <svg>",
@@ -331,7 +364,7 @@ def _declarations(block: str) -> Declarations:
         important = plain != value
         if key == "font":
             found = _font_shorthand(plain)
-        elif key in STYLE_PROPERTIES or key in UNFOLLOWED:
+        elif key in STYLE_PROPERTIES or key in UNFOLLOWED or key in POSITIONS:
             found = {key: plain}
         else:
             continue
@@ -342,35 +375,49 @@ def _declarations(block: str) -> Declarations:
 
 
 def _font_shorthand(value: str) -> dict[str, str]:
-    """Read font-size and font-weight from a font shorthand such as "bold 60px/1.2 sans-serif".
+    """Read a font shorthand such as "bold 60px/1.2 sans-serif".
 
-    A weight is a keyword or a number from 1 to 1000; one that is not given
-    is normal, as in CSS. A shorthand without a size or without a family
-    is not valid and gives nothing. A system font (such as caption), a
-    var() or a CSS-wide keyword gives its whole value as both, which is
+    Gives font-size and font-weight, and the width-changing font-stretch,
+    font-variant and font-size-adjust, which the shorthand sets as well. A
+    weight is a keyword or a number from 1 to 1000; a weight, stretch or
+    variant that is not given is normal, as in CSS, and font-size-adjust is
+    reset to none. A shorthand without a size or without a family is not
+    valid and gives nothing. A system font (such as caption), a var() or a
+    CSS-wide keyword gives its whole value as size and weight, which is
     then not a plain length.
     """
     if value in CSS_WIDE or value in SYSTEM_FONTS or "var(" in value:
         return {"font-size": value, "font-weight": value}
-    weight = "normal"
+    found = {"font-weight": "normal", "font-stretch": "normal", "font-variant": "normal", "font-size-adjust": "none"}
     tokens = value.replace("/", " / ").split()
     for i, token in enumerate(tokens):
         number = float(token) if re.fullmatch(NUMBER, token) else None
         if token in ("bold", "bolder", "lighter") or (number is not None and 1 <= number <= 1000):
-            weight = token
+            found["font-weight"] = token
         elif number:
             # A number that is neither a weight nor 0 is not a size either.
             return {}
+        elif token.endswith(("condensed", "expanded")) and token in FONT_PREFIX:
+            found["font-stretch"] = token
+        elif token == "small-caps":
+            found["font-variant"] = token
         elif token in FONT_PREFIX or re.fullmatch(rf"{NUMBER}(?:deg|grad|rad|turn)", token):
             continue
         elif re.match(r"[+-]?[0-9.]", token) or token in FONT_SIZES or token.startswith("calc("):
             family = tokens[i + 1 :]
             if family[:1] == ["/"]:
                 family = family[2:]
-            return {"font-size": token, "font-weight": weight} if family else {}
+            return {"font-size": token, **found} if family else {}
         else:
             return {}
     return {}
+
+
+def _followed(name: str, value: str) -> bool:
+    """Whether the estimate follows a value of a keyword property it reads (see KEYWORDS)."""
+    if name not in KEYWORDS or value == "inherit" or value in KEYWORDS[name]:
+        return True
+    return name == "font-weight" and bool(re.fullmatch(NUMBER, value)) and 1 <= float(value) <= 1000
 
 
 def _style_rules(css: str) -> list[tuple[str, str, bool]]:
@@ -483,8 +530,8 @@ def _cascade(
     per element, and per element a set of reasons not to estimate it:
     "style" when a rule that is not read may match it, "css-transform" when
     a CSS transform other than none is set on it, "css" when a value or a
-    property the estimate does not follow (var(), revert, letter-spacing,
-    ...) is set on it.
+    property the estimate does not follow (var(), revert, a keyword it does
+    not know, letter-spacing, font-stretch, x from CSS, ...) is set on it.
     """
     rules, unread = [], []
     for style in root.iter():
@@ -528,7 +575,10 @@ def _cascade(
                 own[name] = "inherit"
             elif value in ("revert", "revert-layer") or "var(" in value or (value == "inherit" and name == "transform"):
                 reasons[el].add("css")
-            if name in UNFOLLOWED and own[name] not in NO_EFFECT:
+            if (name in UNFOLLOWED and own[name] not in NO_EFFECT) or not _followed(name, own[name]):
+                reasons[el].add("css")
+            # x, y, dx and dy from CSS move the characters of a text or tspan.
+            if name in POSITIONS and name in css and _local(el.tag) in ("text", "tspan"):
                 reasons[el].add("css")
         styles[el] = own
         if any(_matches(el, subject) for subject in unread):

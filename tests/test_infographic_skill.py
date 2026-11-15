@@ -492,6 +492,78 @@ class TestOverlaps:
             labels = f'<text x="20" y="40" {style}>Members</text>{budget}'
             assert len(check_svg.overlaps(_with_labels(labels))[0]) == 1, style
 
+    def test_positions_from_css_are_skipped_and_counted(self):
+        """x, y, dx and dy set from CSS move a label (SVG 2); they are not followed but counted."""
+        members = '<text x="20" y="40">Members</text>'
+        for budget in (
+            '<text x="300" y="40" style="x: 20px">Budget</text>',
+            '<text x="300" y="40" style="dx: 0">Budget</text>',
+            '<style>tspan { y: 40px }</style><text x="300" y="90"><tspan>Budget</tspan></text>',
+        ):
+            assert check_svg.overlap_report(_with_labels(members + budget)) == ([], {"css": 1}), budget
+        # As attributes they are read, and from CSS on a group they move nothing.
+        labels = '<g style="x: 300px"><text x="20" y="40">Members</text></g><text x="20" y="40" dx="0">Budget</text>'
+        assert len(check_svg.overlaps(_with_labels(labels))[0]) == 1
+
+    def test_keywords_the_estimate_does_not_know_are_skipped_and_counted(self):
+        """A text-anchor, dominant-baseline or font-weight it does not know is counted, not taken as the default."""
+        budget = '<text x="70" y="40">Budget</text>'
+        for attrs in (
+            'text-anchor="end" style="text-anchor: bogus"',
+            'text-anchor="ending"',
+            'dominant-baseline="hanging" style="dominant-baseline: bogus"',
+            'dominant-baseline="mathematical"',
+            'font-weight="bold" style="font-weight: bogus"',
+            'font-weight="1001"',
+            'style="font-weight: 600px"',
+        ):
+            labels = f'<text x="100" y="40" {attrs}>Members</text>{budget}'
+            assert check_svg.overlap_report(_with_labels(labels)) == ([], {"css": 1}), attrs
+        for attrs in (
+            'text-anchor="end"',
+            'dominant-baseline="alphabetic"',
+            'font-weight="450"',
+            'font-weight="inherit"',
+        ):
+            labels = f'<text x="100" y="40" {attrs}>Members</text>{budget}'
+            assert len(check_svg.overlaps(_with_labels(labels))[0]) == 1, attrs
+
+    def test_alignment_baseline_and_width_changing_properties_are_skipped_and_counted(self):
+        """alignment-baseline and the properties that change the width of text are counted, unless they are normal."""
+        budget = '<text x="60" y="40">Budget</text>'
+        for attrs in (
+            'alignment-baseline="hanging"',
+            'style="font-stretch: expanded"',
+            'font-stretch="150%"',
+            'font-variant="small-caps"',
+            'font-size-adjust="0.9"',
+            'style="text-transform: uppercase"',
+            'style="white-space: pre"',
+        ):
+            labels = f'<text x="20" y="40" {attrs}>Members</text>{budget}'
+            assert check_svg.overlap_report(_with_labels(labels)) == ([], {"css": 1}), attrs
+        for attrs in (
+            'alignment-baseline="baseline"',
+            'style="font-stretch: normal"',
+            'font-stretch="100%"',
+            'font-variant="normal"',
+            'font-size-adjust="none"',
+            'style="text-transform: none"',
+            'style="white-space: nowrap"',
+        ):
+            labels = f'<text x="20" y="40" {attrs}>Members</text>{budget}'
+            assert len(check_svg.overlaps(_with_labels(labels))[0]) == 1, attrs
+
+    def test_stretch_and_small_caps_in_the_font_shorthand_are_counted(self):
+        """The font shorthand also sets font-stretch and font-variant: a stretch or small-caps is counted."""
+        budget = '<text x="60" y="40">Budget</text>'
+        for font in ("expanded 16px serif", "bold condensed 16px serif", "small-caps 16px serif"):
+            labels = f'<text x="20" y="40" style="font: {font}">Members</text>{budget}'
+            assert check_svg.overlap_report(_with_labels(labels)) == ([], {"css": 1}), font
+        # Without them it resets both to normal.
+        reset = '<text x="20" y="40" font-stretch="expanded" style="font: 16px serif">Members</text>'
+        assert len(check_svg.overlaps(_with_labels(reset + budget))[0]) == 1
+
     def test_style_media_other_than_screen_is_not_read(self):
         """A <style> with a media other than all or screen may not hold; labels it may style are counted."""
         labels = '<text x="20" y="40">Members</text><text x="20" y="40">Budget</text>'

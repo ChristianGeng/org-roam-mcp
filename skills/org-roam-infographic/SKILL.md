@@ -99,7 +99,9 @@ for example: `Source: org-roam notes reading-circle, club-budget; 2026-11-09`.
   `display: none`, is not drawn and not measured. Labels it cannot
   estimate (rotated or scaled, a CSS `transform`, `textLength`,
   `<textPath>`, inside a nested `<svg>`, a `var()` or `revert` value,
-  `letter-spacing`, `writing-mode` or `visibility`, or styled by other
+  a keyword it does not know, `x` or `y` set from CSS, `letter-spacing`,
+  `font-stretch` and other properties that change the width,
+  `writing-mode`, `alignment-baseline` or `visibility`, or styled by other
   `<style>` rules, such as `g text`, `@media` or a `<style media="print">`)
   are counted by kind in a `note:` line; look at those in the rendered
   picture.
