@@ -300,7 +300,12 @@ class Hit:
 def similar(
     query: str, limit: int = 10, tag: str | None = None, embedder: Embedder | None = None
 ) -> tuple[list[Hit], IndexStats]:
-    """Return the nodes most similar to query, best first, one per node (its best piece)."""
+    """Return the nodes most similar to query, best first, one per node (its best piece).
+
+    A limit below 1 returns nothing, without indexing.
+    """
+    if limit < 1:
+        return [], IndexStats()
     embedder = embedder or get_embedder()
     cache, stats, by_id, allowed, indexed = index(embedder, tag)
     try:

@@ -299,3 +299,12 @@ class TestCompareScript:
             ("Wann blüht der Kürbis?", ["a", "b", "c"]),
             ("no ids", []),
         ]
+
+
+def test_similar_returns_nothing_for_a_limit_below_one(notes):
+    """similar() itself refuses a limit below 1, as search_similar does (the script calls it directly)."""
+    for limit in (0, -3):
+        hits, stats = semantic.similar("basil", limit=limit, embedder=FakeEmbedder())
+        assert hits == []
+        assert stats.embedded == 0
+

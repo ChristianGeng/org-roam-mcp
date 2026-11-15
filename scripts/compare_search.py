@@ -81,6 +81,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=10, help="results per search (default 10)")
     parser.add_argument("--tag", help="only nodes with this tag")
     args = parser.parse_args(argv)
+    if args.limit < 1:
+        parser.error("--limit must be at least 1")
 
     questions = read_questions(args.questions)
     if not questions:
