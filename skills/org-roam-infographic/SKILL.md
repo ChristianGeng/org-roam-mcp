@@ -91,12 +91,20 @@ for example: `Source: org-roam notes reading-circle, club-budget; 2026-11-09`.
   (`<file>: warning: labels overlap: ...`). It estimates each label's box
   from its position, anchor and font size, so a warning alone does not
   fail the check; `--strict` makes it fail. Fix every overlap warning, or
-  tell the user why it is a false alarm. Labels it cannot estimate
-  (rotated, scaled, with `textLength`) are counted in a `note:` line;
-  look at those in the rendered picture. Font sizes, weights and anchors
-  set by rules in a `<style>` block are not read yet (the label is
-  estimated at 16 px, anchored at its start), so check labels styled by
-  classes in the rendered picture too.
+  tell the user why it is a false alarm. It reads these from attributes,
+  `style=`, and simple rules in a `<style>` block (selectors by element
+  name, `.class` and `#id`, and comma lists of them; the `font:`
+  shorthand too), with the precedence of CSS, `!important` included.
+  Text in `<title>`, `<desc>` and `<metadata>`, and anything with
+  `display: none`, is not drawn and not measured. Labels it cannot
+  estimate (rotated or scaled, a CSS `transform`, `textLength`,
+  `<textPath>`, inside a nested `<svg>`, a `var()` or `revert` value,
+  a keyword it does not know, `x` or `y` set from CSS, `letter-spacing`,
+  `font-stretch` and other properties that change the width,
+  `writing-mode`, `alignment-baseline` or `visibility`, or styled by other
+  `<style>` rules, such as `g text`, `@media` or a `<style media="print">`)
+  are counted by kind in a `note:` line; look at those in the rendered
+  picture.
 - Render the file once and look at it, for example with
   `rsvg-convert -o check.png file.svg`, or with a headless browser:
   `google-chrome --headless=new --screenshot=check.png file.svg`.
