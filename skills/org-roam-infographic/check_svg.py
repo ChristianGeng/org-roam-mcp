@@ -54,19 +54,10 @@ TRANSFORM = re.compile(r"\s*([a-zA-Z]+)\s*\(([^)]*)\)\s*,?")
 # The properties the estimate reads, from attributes, <style> rules or
 # style= (the font shorthand gives font-size and font-weight).
 STYLE_PROPERTIES = ("font-size", "font-weight", "text-anchor", "dominant-baseline", "transform", "display")
-# Their values for initial (and unset, where they are not inherited).
-INITIAL = {
-    "font-size": f"{DEFAULT_FONT_SIZE:g}px",
-    "font-weight": "normal",
-    "text-anchor": "start",
-    "dominant-baseline": "auto",
-    "transform": "none",
-    "display": "inline",
-}
 # Properties that change where, whether or how wide text is drawn in ways
-# the estimate does not follow; a label with one of them set (to a value not
-# in NO_EFFECT) is skipped and counted. The first ones are also presentation
-# attributes.
+# the estimate does not follow; a label with one of them set to a value
+# that has an effect is skipped and counted. The first ones are also
+# presentation attributes.
 UNFOLLOWED_ATTRIBUTES = (
     "letter-spacing",
     "word-spacing",
@@ -81,21 +72,63 @@ UNFOLLOWED_ATTRIBUTES = (
     "font-size-adjust",
     "white-space",
 )
-UNFOLLOWED = UNFOLLOWED_ATTRIBUTES + ("rotate", "scale", "translate", "text-transform")
+# The longhands of font-variant, and the other font properties that change
+# the width of text; the font shorthand resets them all.
+FONT_WIDTH = (
+    "font-variant-caps",
+    "font-variant-numeric",
+    "font-variant-ligatures",
+    "font-variant-east-asian",
+    "font-variant-position",
+    "font-variant-alternates",
+    "font-kerning",
+    "font-feature-settings",
+    "font-variation-settings",
+)
+UNFOLLOWED = UNFOLLOWED_ATTRIBUTES + FONT_WIDTH + ("font-synthesis", "rotate", "scale", "translate", "text-transform")
+# Per unfollowed property, the values that have no effect, its initial
+# value first. For scale and translate each of up to three values counts.
 NO_EFFECT = {
-    "normal",
-    "0",
-    "0px",
-    "100%",
-    "none",
-    "auto",
-    "visible",
-    "ltr",
-    "baseline",
-    "horizontal-tb",
-    "nowrap",
-    "inherit",
+    "letter-spacing": ("normal", "0", "0px"),
+    "word-spacing": ("normal", "0", "0px"),
+    "writing-mode": ("horizontal-tb",),
+    "direction": ("ltr",),
+    "unicode-bidi": ("normal",),
+    "alignment-baseline": ("auto", "baseline"),
+    "baseline-shift": ("baseline", "0", "0px"),
+    "visibility": ("visible",),
+    "font-stretch": ("normal", "100%"),
+    "font-variant": ("normal",),
+    "font-size-adjust": ("none",),
+    "white-space": ("normal", "nowrap"),
+    "font-variant-caps": ("normal",),
+    "font-variant-numeric": ("normal",),
+    "font-variant-ligatures": ("normal",),
+    "font-variant-east-asian": ("normal",),
+    "font-variant-position": ("normal",),
+    "font-variant-alternates": ("normal",),
+    "font-kerning": ("auto",),
+    "font-feature-settings": ("normal",),
+    "font-variation-settings": ("normal",),
+    "font-synthesis": ("weight style small-caps position", "weight style"),
+    "rotate": ("none", "0deg", "0rad", "0grad", "0turn"),
+    "scale": ("none", "1", "100%"),
+    "translate": ("none", "0", "0px"),
+    "text-transform": ("none",),
 }
+# Their values for initial (and unset, where they are not inherited).
+INITIAL = {
+    **{name: values[0] for name, values in NO_EFFECT.items()},
+    "font-size": f"{DEFAULT_FONT_SIZE:g}px",
+    "font-weight": "normal",
+    "text-anchor": "start",
+    "dominant-baseline": "auto",
+    "transform": "none",
+    "display": "inline",
+}
+# What the font shorthand sets besides its size, and to what when it does
+# not give it: the width-changing font properties are reset to initial.
+FONT_RESETS = ("font-weight", "font-stretch", "font-variant", "font-size-adjust") + FONT_WIDTH
 # The positions of a label, which SVG 2 also takes as CSS properties. As
 # attributes they are read; set from CSS, to any value, they are not followed.
 POSITIONS = ("x", "y", "dx", "dy")
@@ -107,7 +140,12 @@ KEYWORDS = {
     "dominant-baseline": {"auto", "alphabetic"}.union(BASELINES),
     "font-weight": {"normal", "bold", "bolder", "lighter"},
 }
-INHERITED = {"font-size", "font-weight", "text-anchor", "dominant-baseline"}.union(UNFOLLOWED_ATTRIBUTES)
+INHERITED = {"font-size", "font-weight", "text-anchor", "dominant-baseline", "font-synthesis", "text-transform"}.union(
+    UNFOLLOWED_ATTRIBUTES, FONT_WIDTH
+) - {"unicode-bidi", "alignment-baseline", "baseline-shift"}
+# What the all property sets: every property but direction and unicode-bidi
+# (the positions, from CSS, are not followed anyway).
+ALL = tuple(name for name in STYLE_PROPERTIES + UNFOLLOWED if name not in ("direction", "unicode-bidi"))
 # Words of the font shorthand before its size, and sizes that are keywords.
 FONT_PREFIX = {
     "normal",
@@ -352,7 +390,10 @@ def _declarations(block: str) -> Declarations:
 
     Returns per property its value, in lower case, and whether it is
     !important. An !important declaration wins over a normal one; otherwise
-    the later one wins. The font shorthand gives font-size and font-weight.
+    the later one wins. The font shorthand gives font-size, font-weight and
+    the font properties it resets (see _font_shorthand); font-variant resets
+    its longhands; all with a CSS-wide keyword or a var() gives that value
+    to every property it sets (see ALL), and with anything else is not valid.
     """
     properties: Declarations = {}
     for part in _opaque(block).split(";"):
@@ -364,6 +405,10 @@ def _declarations(block: str) -> Declarations:
         important = plain != value
         if key == "font":
             found = _font_shorthand(plain)
+        elif key == "all":
+            found = dict.fromkeys(ALL, plain) if plain in CSS_WIDE or "var(" in plain else {}
+        elif key == "font-variant":
+            found = {**dict.fromkeys(FONT_WIDTH[:6], "initial"), key: plain}
         elif key in STYLE_PROPERTIES or key in UNFOLLOWED or key in POSITIONS:
             found = {key: plain}
         else:
@@ -377,18 +422,22 @@ def _declarations(block: str) -> Declarations:
 def _font_shorthand(value: str) -> dict[str, str]:
     """Read a font shorthand such as "bold 60px/1.2 sans-serif".
 
-    Gives font-size and font-weight, and the width-changing font-stretch,
-    font-variant and font-size-adjust, which the shorthand sets as well. A
-    weight is a keyword or a number from 1 to 1000; a weight, stretch or
-    variant that is not given is normal, as in CSS, and font-size-adjust is
-    reset to none. A shorthand without a size or without a family is not
-    valid and gives nothing. A system font (such as caption), a var() or a
-    CSS-wide keyword gives its whole value as size and weight, which is
-    then not a plain length.
+    Gives font-size and the properties of FONT_RESETS, which the shorthand
+    sets as well. A weight is a keyword or a number from 1 to 1000; a
+    weight, stretch or variant that is not given is normal, as in CSS, and
+    the other width-changing font properties (font-size-adjust,
+    font-kerning, font-feature-settings, ...) are reset to their initial
+    values. A shorthand without a size or without a family is not valid
+    and gives nothing. A CSS-wide keyword or a var() gives its whole value
+    to all of them. A system font (such as caption) gives its name as size
+    and weight, which is then not a plain length, and resets the others.
     """
-    if value in CSS_WIDE or value in SYSTEM_FONTS or "var(" in value:
-        return {"font-size": value, "font-weight": value}
-    found = {"font-weight": "normal", "font-stretch": "normal", "font-variant": "normal", "font-size-adjust": "none"}
+    if value in CSS_WIDE or "var(" in value:
+        return dict.fromkeys(("font-size",) + FONT_RESETS, value)
+    found = dict.fromkeys(FONT_RESETS, "initial")
+    if value in SYSTEM_FONTS:
+        return {**found, "font-size": value, "font-weight": value}
+    found["font-weight"] = "normal"
     tokens = value.replace("/", " / ").split()
     for i, token in enumerate(tokens):
         number = float(token) if re.fullmatch(NUMBER, token) else None
@@ -411,6 +460,21 @@ def _font_shorthand(value: str) -> dict[str, str]:
         else:
             return {}
     return {}
+
+
+def _unknown(value: str) -> bool:
+    """Whether a value is one the cascade does not resolve: revert, revert-layer or a var()."""
+    return value in ("revert", "revert-layer") or "var(" in value
+
+
+def _no_effect(name: str, value: str) -> bool:
+    """Whether a value of an unfollowed property has no effect (see NO_EFFECT), or is inherited."""
+    value = " ".join(value.split())
+    if value == "inherit" or value in NO_EFFECT[name]:
+        return True
+    # scale and translate take up to three values, one per axis.
+    parts = value.split()
+    return name in ("scale", "translate") and len(parts) <= 3 and set(parts) <= set(NO_EFFECT[name]) - {"none"}
 
 
 def _followed(name: str, value: str) -> bool:
@@ -573,9 +637,9 @@ def _cascade(
                 own[name] = INITIAL.get(name, "normal")
             elif value == "unset":
                 own[name] = "inherit"
-            elif value in ("revert", "revert-layer") or "var(" in value or (value == "inherit" and name == "transform"):
+            elif _unknown(value) or (value == "inherit" and name == "transform"):
                 reasons[el].add("css")
-            if (name in UNFOLLOWED and own[name] not in NO_EFFECT) or not _followed(name, own[name]):
+            if (name in UNFOLLOWED and not _no_effect(name, own[name])) or not _followed(name, own[name]):
                 reasons[el].add("css")
             # x, y, dx and dy from CSS move the characters of a text or tspan.
             if name in POSITIONS and name in css and _local(el.tag) in ("text", "tspan"):
@@ -583,7 +647,8 @@ def _cascade(
         styles[el] = own
         if any(_matches(el, subject) for subject in unread):
             reasons[el].add("style")
-        if "transform" in css and own["transform"] != "none":
+        # A var() or revert (as from all) is a value not followed, not a transform.
+        if "transform" in css and own["transform"] != "none" and not _unknown(css["transform"]):
             reasons[el].add("css-transform")
     return styles, reasons
 

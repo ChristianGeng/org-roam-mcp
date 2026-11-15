@@ -564,6 +564,113 @@ class TestOverlaps:
         reset = '<text x="20" y="40" font-stretch="expanded" style="font: 16px serif">Members</text>'
         assert len(check_svg.overlaps(_with_labels(reset + budget))[0]) == 1
 
+    def test_no_effect_values_are_per_property(self):
+        """A value without effect for one property (0, 100%) may have one for another: scale: 0, translate: 100%."""
+        budget = '<text x="20" y="40">Budget</text>'
+        for attrs in (
+            'style="scale: 0"',
+            'style="translate: 100%"',
+            'baseline-shift="100%"',
+            'style="font-size-adjust: 0"',
+            'style="rotate: 0"',
+            'style="font-variant: none"',
+        ):
+            labels = f'<text x="20" y="40" {attrs}>Members</text>{budget}'
+            assert check_svg.overlap_report(_with_labels(labels)) == ([], {"css": 1}), attrs
+        for attrs in (
+            'style="scale: 1"',
+            'style="scale: 1 100%"',
+            'style="translate: 0 0px"',
+            'style="rotate: 0deg"',
+            'baseline-shift="0"',
+            'style="letter-spacing: 0"',
+            'style="font-stretch: 100%"',
+            'style="font-size-adjust: initial"',
+        ):
+            labels = f'<text x="20" y="40" {attrs}>Members</text>{budget}'
+            assert len(check_svg.overlaps(_with_labels(labels))[0]) == 1, attrs
+
+    def test_the_font_shorthand_resets_the_width_changing_font_properties(self):
+        """font, also as initial, inherit or a system font, resets an earlier stretch, variant, size adjustment, ..."""
+        budget = '<text x="20" y="40">Budget</text>'
+        for earlier in (
+            "font-stretch: expanded",
+            "font-variant: small-caps",
+            "font-variant-caps: small-caps",
+            "font-size-adjust: 0.5",
+            "font-kerning: none",
+            "font-feature-settings: 'liga' 0",
+            "font-variation-settings: 'wdth' 150",
+        ):
+            for font in ("initial", "inherit", "unset", "16px serif"):
+                labels = f'<text x="20" y="40" style="{earlier}; font: {font}">Members</text>{budget}'
+                assert len(check_svg.overlaps(_with_labels(labels))[0]) == 1, (earlier, font)
+            # In a later rule, too.
+            rules = f"<style>.a {{ {earlier} }} .b {{ font: initial }}</style>"
+            labels = f'{rules}<text class="a b" x="20" y="40">Members</text>{budget}'
+            assert len(check_svg.overlaps(_with_labels(labels))[0]) == 1, earlier
+            # A system font resets them as well; its size is then not followed.
+            labels = f'<text x="20" y="40" style="{earlier}; font: caption">Members</text>{budget}'
+            assert check_svg.overlap_report(_with_labels(labels))[1] == {"css": 1}, earlier
+        # font-variant resets its longhands.
+        labels = (
+            f'<text x="20" y="40" style="font-variant-caps: small-caps; font-variant: normal">Members</text>{budget}'
+        )
+        assert len(check_svg.overlaps(_with_labels(labels))[0]) == 1
+
+    def test_all_sets_every_property_it_covers(self):
+        """all: initial resets display and the rest; later declarations still win; all: revert or var() is counted."""
+        budget = '<text x="20" y="40">Budget</text>'
+        for attrs in (
+            'display="none" style="all: initial"',
+            'display="none" style="all: unset"',
+            'font-stretch="expanded" style="all: initial"',
+            'transform="rotate(90)" style="all: initial"',
+            'display="none" style="all: initial !important; display: none"',
+        ):
+            labels = f'<text x="20" y="40" {attrs}>Members</text>{budget}'
+            assert len(check_svg.overlaps(_with_labels(labels))[0]) == 1, attrs
+        for attrs in ('style="all: initial; display: none"', 'style="display: none !important; all: initial"'):
+            labels = f'<text x="20" y="40" {attrs}>Members</text>{budget}'
+            assert check_svg.overlap_report(_with_labels(labels)) == ([], {}), attrs
+        for attrs in ('display="none" style="all: revert"', 'display="none" style="all: var(--reset)"'):
+            labels = f'<text x="20" y="40" {attrs}>Members</text>{budget}'
+            assert check_svg.overlap_report(_with_labels(labels)) == ([], {"css": 1}), attrs
+        rule = '<style>text { all: initial }</style><text x="20" y="40" display="none">Members</text>'
+        # In a rule it beats the attribute; an all that is not valid is dropped.
+        labels = rule + '<text x="20" y="40" style="all: none">Budget</text>'
+        assert len(check_svg.overlaps(_with_labels(labels))[0]) == 1
+
+    def test_other_width_changing_font_properties_are_skipped_and_counted(self):
+        """The font-variant longhands, font-kerning, font-feature-settings, ... are counted, unless without effect."""
+        budget = '<text x="20" y="40">Budget</text>'
+        for style in (
+            "font-variant-caps: small-caps",
+            "font-variant-numeric: tabular-nums",
+            "font-variant-ligatures: none",
+            "font-variant-east-asian: full-width",
+            "font-variant-position: super",
+            "font-kerning: none",
+            "font-feature-settings: 'smcp'",
+            "font-variation-settings: 'wght' 900",
+            "font-synthesis: none",
+        ):
+            labels = f'<text x="20" y="40" style="{style}">Members</text>{budget}'
+            assert check_svg.overlap_report(_with_labels(labels)) == ([], {"css": 1}), style
+        for style in (
+            "font-variant-caps: normal",
+            "font-variant-numeric: normal",
+            "font-variant-ligatures: normal",
+            "font-variant-east-asian: normal",
+            "font-variant-position: normal",
+            "font-kerning: auto",
+            "font-feature-settings: normal",
+            "font-variation-settings: normal",
+            "font-synthesis: weight style",
+        ):
+            labels = f'<text x="20" y="40" style="{style}">Members</text>{budget}'
+            assert len(check_svg.overlaps(_with_labels(labels))[0]) == 1, style
+
     def test_style_media_other_than_screen_is_not_read(self):
         """A <style> with a media other than all or screen may not hold; labels it may style are counted."""
         labels = '<text x="20" y="40">Members</text><text x="20" y="40">Budget</text>'
