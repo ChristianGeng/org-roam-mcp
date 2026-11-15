@@ -19,6 +19,7 @@ AI client → MCP server (Python, stdio) → sqlite3 (reads)
 |------|------------|---------|
 | `org_roam_find` | `search` | Find nodes by title substring |
 | `org_roam_search_text` | `query, limit=20, tag=None` | Find nodes by the words in their text |
+| `org_roam_search_similar` | `query, limit=10, tag=None` | Find nodes by meaning (only with the extra `semantic`, see [Search by meaning](#search-by-meaning-optional)) |
 | `org_roam_read_node` | `node_id` | Read the full file of a node |
 | `org_roam_backlinks` | `node_id` | All nodes that link to a node |
 | `org_roam_bfs` | `node_id, depth=2` | Breadth-first neighbourhood of a node |
@@ -56,6 +57,71 @@ roam-graph-mobile app) would be worth it when calls get slow with many more
 notes.
 
 Worked examples: [docs/examples.md](docs/examples.md).
+
+### Search by meaning (optional)
+
+A trial: `org_roam_search_similar` finds notes about the same thing in other
+words, also across German and English, with an embedding model that runs on
+the laptop. It is there only when the extra `semantic` is installed; without
+it, nothing changes.
+
+```bash
+uv sync --no-config --extra semantic --directory ~/src/org-roam-mcp
+claude mcp add --scope user org-roam -- \
+  uv run --no-config --extra semantic --directory ~/src/org-roam-mcp org-roam-mcp
+```
+
+(With uvx: `uvx --no-config --from 'org-roam-mcp[semantic] @ git+https://github.com/ChristianGeng/org-roam-mcp' org-roam-mcp`;
+that may install the larger CUDA build of PyTorch, see below.)
+
+- **Size.** The extra installs `sentence-transformers` with PyTorch,
+  transformers, scikit-learn and the Hugging Face libraries: about 1 GB in
+  the environment (PyTorch alone about 750 MB). In a clone, `uv sync` takes
+  PyTorch from PyTorch's CPU-only index on Linux and Windows, so no CUDA
+  libraries are installed.
+- **Model.** `intfloat/multilingual-e5-small` (384 dimensions, about 490 MB
+  on disk, German and English), or any sentence-transformers model named in
+  `ORG_ROAM_MCP_EMBED_MODEL`. e5 models get their `query: ` and `passage: `
+  prefixes; other models none.
+- **What leaves the machine:** only the model download, once, from Hugging
+  Face (into `~/.cache/huggingface`). The notes and the queries are not sent
+  anywhere.
+- **Pieces.** Each node (the file's node, and each heading with its own
+  `:ID:`, as in `org_roam_search_text`) is one piece, or several pieces of
+  200–400 words when it is longer, with the node's title and tags in front.
+  Property drawers are left out. A result is one line per node, most similar
+  first: `id | title | file:line | snippet`, where the snippet is the start
+  of the node's best piece.
+- **Cache.** The vectors are kept in `$XDG_CACHE_HOME/org-roam-mcp/semantic.sqlite`
+  (default `~/.cache/org-roam-mcp/`; `ORG_ROAM_MCP_CACHE_DIR` sets another
+  folder), never in the notes folder. They are keyed by file, a hash of the
+  file (with its titles and tags from the database) and model, so a call
+  embeds only new and changed files; files no longer in the database are
+  dropped. Deleting the file is safe; it is built again.
+- **First call.** It loads the model (about 20 s) and embeds every note,
+  which can take minutes and may be longer than the client waits for a
+  tool. Run the comparison script once first (below); it fills the same
+  cache. With 200 synthetic notes (307 pieces) on a busy 12-core laptop,
+  embedding took about 150 s (0.5 s a piece); a query on the filled cache
+  then took about 0.04 s.
+
+**Comparing it with the text search.** Write your questions into a file, one
+per line, optionally with `|` and the IDs of the notes that should be found:
+
+```text
+how do I keep the soil moist | 1f0c2d4e-... 9a2e7b10-...
+Wann wird der Kürbis geerntet?
+```
+
+```bash
+uv run --no-config --extra semantic scripts/compare_search.py questions.txt
+```
+
+It prints the database and the model, the time to index, and for each
+question the top 10 of both searches side by side (expected IDs marked with
+`*`), the time of each, and recall@10 when IDs are given, with averages at the
+end. The text search needs every word of a question in a node, so for a
+whole sentence it often finds nothing; that is part of the comparison.
 
 ## Install
 

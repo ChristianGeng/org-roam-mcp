@@ -6,6 +6,7 @@ from mcp.server.fastmcp import FastMCP
 
 from . import queries
 from . import search_text
+from . import semantic
 from . import tools_advanced
 from .db import query
 from .db import quote_param
@@ -44,6 +45,29 @@ def register(mcp: FastMCP) -> None:
 
         """
         return search_text.search_text(query, limit, tag)
+
+    if semantic.available():
+
+        @mcp.tool()
+        def org_roam_search_similar(query: str, limit: int = 10, tag: str | None = None) -> str:
+            """Find notes by meaning, not by their exact words (a local embedding model).
+
+            Finds notes about the same thing in other words, also across
+            German and English. One line per node, most similar first:
+            id | title | file:line | snippet, where the snippet is the start
+            of the node's best-matching piece. Pieces are a node's text
+            (heading nodes on their own; property drawers left out) with its
+            title and tags in front. The first call embeds every note, which
+            can take minutes; later calls embed only new and changed files.
+            Nothing leaves the machine.
+
+            Args:
+                query: What to look for, in words (a question or a description)
+                limit: Number of nodes to return (default 10)
+                tag: Only nodes with this tag (optional)
+
+            """
+            return semantic.search_similar(query, limit, tag)
 
     @mcp.tool()
     def org_roam_backlinks(node_id: str) -> list[dict]:

@@ -12,8 +12,18 @@ dependencies = [
     # mcp 2 renamed FastMCP to MCPServer; port before lifting this.
     "mcp>=1.0.0,<2",
     "networkx>=3.0",
+    # Already installed with scipy; the semantic search uses it directly.
+    "numpy>=1.24",
     "python-louvain>=0.16",
     "scipy>=1.10",
+]
+
+[project.optional-dependencies]
+# Search by meaning (org_roam_search_similar). torch is named here only so
+# that uv takes it from the CPU-only index below (no CUDA libraries).
+semantic = [
+    "sentence-transformers>=3.0",
+    "torch>=2.2",
 ]
 
 [project.scripts]
@@ -24,6 +34,16 @@ dev = [
     "pytest>=7.0.0",
     "ruff>=0.1.0",
 ]
+
+[tool.uv.sources]
+# macOS wheels on PyPI are CPU-only already; on Linux and Windows the PyPI
+# wheel brings several GB of CUDA libraries.
+torch = [{ index = "pytorch-cpu", marker = "sys_platform != 'darwin'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]
