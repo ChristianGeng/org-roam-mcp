@@ -54,17 +54,83 @@ TRANSFORM = re.compile(r"\s*([a-zA-Z]+)\s*\(([^)]*)\)\s*,?")
 # The properties the estimate reads, from attributes, <style> rules or
 # style= (the font shorthand gives font-size and font-weight).
 STYLE_PROPERTIES = ("font-size", "font-weight", "text-anchor", "dominant-baseline", "transform", "display")
+# Their values for initial (and unset, where they are not inherited).
+INITIAL = {
+    "font-size": f"{DEFAULT_FONT_SIZE:g}px",
+    "font-weight": "normal",
+    "text-anchor": "start",
+    "dominant-baseline": "auto",
+    "transform": "none",
+    "display": "inline",
+}
+# Properties that change where or whether text is drawn in ways the estimate
+# does not follow; a label with one of them set (to a value not in NO_EFFECT)
+# is skipped and counted. The first ones are also presentation attributes.
+UNFOLLOWED_ATTRIBUTES = (
+    "letter-spacing",
+    "word-spacing",
+    "writing-mode",
+    "direction",
+    "unicode-bidi",
+    "baseline-shift",
+    "visibility",
+)
+UNFOLLOWED = UNFOLLOWED_ATTRIBUTES + ("rotate", "scale", "translate")
+NO_EFFECT = {"normal", "0", "0px", "none", "auto", "visible", "ltr", "baseline", "horizontal-tb", "inherit"}
+INHERITED = {"font-size", "font-weight", "text-anchor", "dominant-baseline"}.union(UNFOLLOWED_ATTRIBUTES)
+# Words of the font shorthand before its size, and sizes that are keywords.
+FONT_PREFIX = {
+    "normal",
+    "italic",
+    "oblique",
+    "small-caps",
+    "ultra-condensed",
+    "extra-condensed",
+    "condensed",
+    "semi-condensed",
+    "semi-expanded",
+    "expanded",
+    "extra-expanded",
+    "ultra-expanded",
+}
+FONT_SIZES = {
+    "xx-small",
+    "x-small",
+    "small",
+    "medium",
+    "large",
+    "x-large",
+    "xx-large",
+    "xxx-large",
+    "larger",
+    "smaller",
+}
+SYSTEM_FONTS = {"caption", "icon", "menu", "message-box", "small-caption", "status-bar"}
+CSS_WIDE = {"inherit", "initial", "unset", "revert", "revert-layer"}
+# Comments, strings and url(...) in CSS, whose braces and semicolons do not count.
+CSS_OPAQUE = re.compile(
+    r"/\*.*?(?:\*/|$)|\"(?:\\.|[^\"\\\n])*\"?|'(?:\\.|[^'\\\n])*'?|url\([^)\"']*",
+    re.DOTALL | re.IGNORECASE,
+)
+# At-rules whose blocks hold no rules for elements (frames, font faces, ...).
+NO_ELEMENT_RULES = re.compile(
+    r"@(?:-[a-z]+-)?(?:keyframes|font-face|font-feature-values|page|counter-style)\b",
+    re.IGNORECASE,
+)
+# The media of a <style> that hold on a screen.
+SCREEN_MEDIA = {"", "all", "screen"}
 # Children of a <text> whose content is not drawn.
 NO_TEXT = {"title", "desc", "metadata"}
 # Why a label was not checked for overlap, as the note line says it.
 SKIPPED = {
+    "css": "with CSS the estimate does not follow (var(), revert, letter-spacing, writing-mode, visibility, ...)",
     "css-transform": "with a CSS transform",
     "layout": "with textLength or rotate",
     "nested-svg": "inside a nested <svg>",
     "style": "styled by <style> rules that are not read",
     "textPath": "on a <textPath>",
     "transform": "with a rotate, scale, matrix or skew transform",
-    "units": "with a position or font size in % or em",
+    "units": "with a position or font size that is not a plain length",
 }
 
 
@@ -229,81 +295,129 @@ def check(svg_text: str) -> list[str]:
 
 
 Styles = dict[ET.Element, dict[str, str]]
+Declarations = dict[str, tuple[str, bool]]
 
 
-def _declarations(block: str) -> tuple[dict[str, str], bool]:
+def _opaque(css: str) -> str:
+    """Blank out comments and what is inside strings and url(...), so their braces and semicolons do not count.
+
+    What the estimate reads (sizes, weights, keywords) is never inside them;
+    a quoted font family stays a word.
+    """
+
+    def blank(match: re.Match) -> str:
+        text = match.group()
+        if text.startswith("/*"):
+            return " "
+        return "url(x" if text[0] not in "\"'" else f"{text[0]}x{text[0]}"
+
+    return CSS_OPAQUE.sub(blank, css)
+
+
+def _declarations(block: str) -> Declarations:
     """Read the properties the estimate uses from a declaration block (style= or a rule).
 
-    The font shorthand gives font-size and font-weight. Later declarations
-    win. Also tells whether any of them is !important.
+    Returns per property its value, in lower case, and whether it is
+    !important. An !important declaration wins over a normal one; otherwise
+    the later one wins. The font shorthand gives font-size and font-weight.
     """
-    properties, important = {}, False
-    for part in block.split(";"):
+    properties: Declarations = {}
+    for part in _opaque(block).split(";"):
         key, colon, value = part.partition(":")
-        key, value = key.strip().lower(), value.strip()
-        if not colon or not value:
+        key, value = key.strip().lower(), value.strip().lower()
+        plain = re.sub(r"!\s*important\s*$", "", value).strip()
+        if not colon or not plain:
             continue
-        plain = re.sub(r"!\s*important\s*$", "", value, flags=re.IGNORECASE).strip()
+        important = plain != value
         if key == "font":
-            properties.update(_font_shorthand(plain))
-        elif key in STYLE_PROPERTIES:
-            properties[key] = plain
+            found = _font_shorthand(plain)
+        elif key in STYLE_PROPERTIES or key in UNFOLLOWED:
+            found = {key: plain}
         else:
             continue
-        important = important or plain != value
-    return properties, important
+        for name, found_value in found.items():
+            if important or not properties.get(name, ("", False))[1]:
+                properties[name] = (found_value, important)
+    return properties
 
 
 def _font_shorthand(value: str) -> dict[str, str]:
     """Read font-size and font-weight from a font shorthand such as "bold 60px/1.2 sans-serif".
 
-    A weight that is not given is normal, as in CSS. A font without a
-    readable size (a system font such as caption) gives its whole value as
-    the size, which is then not a plain length.
+    A weight is a keyword or a number from 1 to 1000; one that is not given
+    is normal, as in CSS. A shorthand without a size or without a family
+    is not valid and gives nothing. A system font (such as caption), a
+    var() or a CSS-wide keyword gives its whole value as both, which is
+    then not a plain length.
     """
-    if value.lower() in ("inherit", "initial", "unset", "revert"):
+    if value in CSS_WIDE or value in SYSTEM_FONTS or "var(" in value:
         return {"font-size": value, "font-weight": value}
     weight = "normal"
-    for token in value.split():
-        size = token.split("/")[0]
-        if token.lower() in ("bold", "bolder", "lighter", "normal") or re.fullmatch(r"[1-9]00", token):
+    tokens = value.replace("/", " / ").split()
+    for i, token in enumerate(tokens):
+        number = float(token) if re.fullmatch(NUMBER, token) else None
+        if token in ("bold", "bolder", "lighter") or (number is not None and 1 <= number <= 1000):
             weight = token
-        elif re.match(r"[+-]?[0-9.]", size):
-            return {"font-size": size, "font-weight": weight}
-    return {"font-size": value, "font-weight": weight}
+        elif number:
+            # A number that is neither a weight nor 0 is not a size either.
+            return {}
+        elif token in FONT_PREFIX or re.fullmatch(rf"{NUMBER}(?:deg|grad|rad|turn)", token):
+            continue
+        elif re.match(r"[+-]?[0-9.]", token) or token in FONT_SIZES or token.startswith("calc("):
+            family = tokens[i + 1 :]
+            if family[:1] == ["/"]:
+                family = family[2:]
+            return {"font-size": token, "font-weight": weight} if family else {}
+        else:
+            return {}
+    return {}
 
 
 def _style_rules(css: str) -> list[tuple[str, str, bool]]:
     """Split CSS into rules, as (selectors, declarations, readable).
 
-    Rules inside @media, @supports and other conditional or layered blocks
-    are not readable: whether and in which order they hold is not followed.
-    Other at-rules (@font-face, @keyframes, ...) style no element.
+    Rules inside @media, @supports, @layer and other at-rules, and rules
+    nested in a rule, are not readable: whether and in which order they
+    hold is not followed. At-rules such as @keyframes and @font-face style
+    no element; what is inside them is left out. One pass, without
+    recursion, so any depth of nesting can be read.
     """
-    css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    css = _opaque(css)
     rules = []
+    # The open blocks, innermost last, as [kind, prelude, body pieces, start
+    # of the current piece]. A kind is "rule", "group" (an at-rule with
+    # rules inside) or "skip" (an at-rule without rules for elements).
+    blocks: list[list] = []
+    statement = 0
 
-    def split(text: str, readable: bool) -> None:
-        position = 0
-        while (start := text.find("{", position)) >= 0:
-            # A statement such as @import ...; may stand before the selectors.
-            prelude = text[position:start].rsplit(";", 1)[-1].strip()
-            depth, end = 1, start + 1
-            while end < len(text) and depth:
-                depth += {"{": 1, "}": -1}.get(text[end], 0)
-                end += 1
-            body = text[start + 1 : end - 1]
-            if not prelude.startswith("@"):
-                rules.append((prelude, body, readable))
-            elif re.match(
-                r"@(media|supports|container|layer|scope|document)\b",
-                prelude,
-                re.IGNORECASE,
-            ):
-                split(body, False)
-            position = end
+    def close(end: int) -> None:
+        kind, prelude, pieces, start = blocks.pop()
+        if kind == "rule":
+            rules.append((prelude, "".join(pieces) + css[start:end], not blocks))
+        if blocks and blocks[-1][0] == "rule":
+            blocks[-1][3] = end + 1
 
-    split(css, True)
+    for i, char in enumerate(css):
+        if char == ";":
+            statement = i + 1
+        elif char == "{":
+            prelude = css[statement:i].strip()
+            if any(block[0] == "skip" for block in blocks) or NO_ELEMENT_RULES.match(prelude):
+                kind = "skip"
+            else:
+                kind = "group" if prelude.startswith("@") else "rule"
+            if blocks and blocks[-1][0] == "rule":
+                # A nested rule is not part of the declarations around it.
+                blocks[-1][2].append(css[blocks[-1][3] : statement])
+            blocks.append([kind, prelude, [], i + 1])
+            statement = i + 1
+        elif char == "}":
+            if blocks:
+                close(i)
+            statement = i + 1
+    # Blocks still open at the end close there, as in CSS.
+    while blocks:
+        close(len(css))
     return rules
 
 
@@ -323,6 +437,15 @@ def _compound(selector: str) -> tuple[str | None, set[str], set[str]] | None:
         {name for kind, name in parts if kind == "."},
         {name for kind, name in parts if kind == "#"},
     )
+
+
+def _specificity(selector: str, compound: tuple[str | None, set[str], set[str]]) -> tuple[int, int, int]:
+    """Return the specificity of a compound selector: ids, classes, element name.
+
+    Every id and class counts, also a repeated one (".big.big" is more
+    specific than ".big").
+    """
+    return selector.count("#"), selector.count("."), 0 if compound[0] is None else 1
 
 
 def _subject(selector: str) -> tuple[str | None, set[str], set[str]]:
@@ -352,44 +475,65 @@ def _cascade(
     """Find the properties the estimate uses for every element, and why some cannot be followed.
 
     As in CSS for SVG: presentation attributes count least, then <style>
-    rules (an id before a class before an element name; at equal weight the
-    later rule wins), then style=. Returns the properties per element, and
-    per element a set of reasons not to estimate it: "style" when a rule
-    that is not read may match it, "css-transform" when a CSS transform
-    other than none is set on it.
+    rules (by specificity: ids, then classes, then the element name; at
+    equal specificity the later rule wins), then style=; !important
+    declarations, in rules and then in style=, win over all of these.
+    Keywords are read in lower case; initial gives the initial value, and
+    unset inherits where the property is inherited. Returns the properties
+    per element, and per element a set of reasons not to estimate it:
+    "style" when a rule that is not read may match it, "css-transform" when
+    a CSS transform other than none is set on it, "css" when a value or a
+    property the estimate does not follow (var(), revert, letter-spacing,
+    ...) is set on it.
     """
     rules, unread = [], []
     for style in root.iter():
         if _local(style.tag) != "style" or not style.text:
             continue
+        # A stylesheet for media other than the screen is not followed.
+        active = (style.get("media") or "").strip().lower() in SCREEN_MEDIA
         for selectors, body, readable in _style_rules(style.text):
-            properties, important = _declarations(body)
+            properties = _declarations(body)
             if not properties:
                 continue
             for selector in selectors.split(","):
                 compound = _compound(selector)
-                if readable and not important and compound is not None:
-                    tag, classes, ids = compound
-                    weight = (len(ids), len(classes), 0 if tag is None else 1)
-                    rules.append((weight, len(rules), compound, properties))
+                if active and readable and compound is not None:
+                    rules.append((_specificity(selector, compound), len(rules), compound, properties))
                 else:
                     unread.append(_subject(selector))
     rules.sort(key=lambda rule: rule[:2])
 
     styles, reasons = {}, {}
     for el in root.iter():
-        css = {}
+        normal, important = {}, {}
         for _, _, compound, properties in rules:
             if _matches(el, compound):
-                css.update(properties)
-        css.update(_declarations(el.get("style") or "")[0])
-        own = {name: el.get(name) for name in STYLE_PROPERTIES if el.get(name) is not None}
+                for name, (value, is_important) in properties.items():
+                    (important if is_important else normal)[name] = value
+        for name, (value, is_important) in _declarations(el.get("style") or "").items():
+            (important if is_important else normal)[name] = value
+        css = {**normal, **important}
+        own = {
+            name: el.get(name).strip().lower()
+            for name in STYLE_PROPERTIES + UNFOLLOWED_ATTRIBUTES
+            if el.get(name) is not None
+        }
         own.update(css)
-        styles[el] = own
         reasons[el] = set()
+        for name, value in own.items():
+            if value == "initial" or (value == "unset" and name not in INHERITED):
+                own[name] = INITIAL.get(name, "normal")
+            elif value == "unset":
+                own[name] = "inherit"
+            elif value in ("revert", "revert-layer") or "var(" in value or (value == "inherit" and name == "transform"):
+                reasons[el].add("css")
+            if name in UNFOLLOWED and own[name] not in NO_EFFECT:
+                reasons[el].add("css")
+        styles[el] = own
         if any(_matches(el, subject) for subject in unread):
             reasons[el].add("style")
-        if (css.get("transform") or "none").strip() != "none":
+        if "transform" in css and own["transform"] != "none":
             reasons[el].add("css-transform")
     return styles, reasons
 
@@ -481,7 +625,7 @@ def _width(label: str, chain: list[ET.Element], styles: Styles) -> float | None:
     if size is None:
         return None
     weight = _inherited(chain, "font-weight", styles) or "normal"
-    bold = weight in ("bold", "bolder") or (weight.isdigit() and int(weight) >= 600)
+    bold = weight in ("bold", "bolder") or (_number(weight) or 0) >= 600
     return len(label) * size * (BOLD_CHAR_WIDTH if bold else CHAR_WIDTH)
 
 
@@ -597,6 +741,8 @@ def _not_estimated(
         return "textPath"
     if any("css-transform" in reasons[el] for el in elements):
         return "css-transform"
+    if any("css" in reasons[el] for el in elements):
+        return "css"
     if any("textLength" in el.attrib or "rotate" in el.attrib for el in drawn):
         return "layout"
     # A transform on a <tspan> (other than none) is not followed either.
