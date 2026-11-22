@@ -2,6 +2,7 @@
 
 import importlib.util
 from pathlib import Path
+import time
 
 
 SKILL_DIR = Path(__file__).resolve().parent.parent / "skills" / "org-roam-infographic"
@@ -293,6 +294,26 @@ class TestOverlaps:
             ):
                 assert check_svg.overlap_report(_with_labels(members + budget)) == ([], {"units": 1}), budget
 
+    def test_translate_with_a_comma_before_or_after_its_numbers_is_not_read(self):
+        """A comma goes only between the numbers of translate(); one before or after them is not valid."""
+        members = '<text x="20" y="40">Members</text>'
+        for transform in ("translate(,200)", "translate(200,)", "translate(200,,0)"):
+            budget = f'<text x="20" y="40" transform="{transform}">Budget</text>'
+            assert check_svg.overlap_report(_with_labels(members + budget)) == ([], {"transform": 1}), transform
+
+    def test_long_translate_arguments_are_read_fast(self):
+        """Long runs of white space or commas in translate() are read in linear time."""
+        members = '<text x="20" y="40">Members</text>'
+        for arguments, expected in (
+            (" " * 20000 + "x", ([], {"transform": 1})),
+            (", " * 20000 + "x", ([], {"transform": 1})),
+            ("200" + " " * 20000 + "0", ([], {})),
+        ):
+            budget = f'<text x="20" y="40" transform="translate({arguments})">Budget</text>'
+            start = time.perf_counter()
+            assert check_svg.overlap_report(_with_labels(members + budget)) == expected, arguments[:20]
+            assert time.perf_counter() - start < 0.5, arguments[:20]
+
     def test_inherited_font_size(self):
         """A large font size set on a parent <g> makes the box larger."""
         labels = '<text x="20" y="40">Members</text><text x="20" y="70">Budget</text>'
@@ -461,7 +482,17 @@ class TestOverlaps:
         """A font shorthand browsers drop (a family that is not a name, a bad line height) changes nothing (#27)."""
         budget = '<text x="200" y="40">Budget</text>'
         members = '<text class="a" x="20" y="40">Members</text>'
-        for font in ("0 60px serif", "16px/abc serif", "16px/-1 serif", "16px/1abc serif", "16px 2col", "16px serif,"):
+        for font in (
+            "0 60px serif",
+            "16px/abc serif",
+            "16px/-1 serif",
+            "16px/1abc serif",
+            "16px/bogus(1) serif",
+            "16px 2col",
+            "16px serif,",
+            "16px inherit",
+            "16px serif, unset",
+        ):
             in_style = f'<text x="20" y="40" style="font-size: 60px; font: {font}">Members</text>'
             in_rule = f"<style>.a {{ font-size: 60px }} .a {{ font: {font} }}</style>" + members
             for labels in (in_style, in_rule):
@@ -473,11 +504,19 @@ class TestOverlaps:
             "16px/120% serif",
             "16px / 1.5em serif",
             "16px/calc(1em + 2px) serif",
+            "16px/CALC(1em + 2px) serif",
             '16px "My Font", sans-serif',
+            '16px "A, B", serif',
             "16px Open Sans,serif",
+            "16PX/NORMAL SERIF",
+            "16px/1.2EM serif",
         ):
-            labels = f'<text x="20" y="40" style="font-size: 60px; font: {font}">Members</text>'
+            labels = f"<text x='20' y='40' style='font-size: 60px; font: {font}'>Members</text>"
+            assert check_svg.check(_with_labels(labels + budget)) == [], font
             assert check_svg.overlaps(_with_labels(labels + budget)) == ([], 0), font
+        # A function may span lines (in a <style>; an attribute turns line breaks into spaces).
+        rule = "<style>.a { font-size: 60px } .a { font: 16px/calc(1em +\n 2px) serif }</style>"
+        assert check_svg.overlaps(_with_labels(rule + members + budget)) == ([], 0)
         calc = '<text x="20" y="40" style="font: calc(10px + 6px) serif">Members</text>'
         assert check_svg.overlap_report(_with_labels(calc + budget)) == ([], {"units": 1})
 

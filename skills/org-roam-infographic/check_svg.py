@@ -51,8 +51,12 @@ BASELINES = {
 }
 ALPHABETIC = (-0.8, 0.2)
 TRANSFORM = re.compile(r"\s*([a-zA-Z]+)\s*\(([^)]*)\)\s*,?")
-# One argument of a transform: a number with its unit, if any.
-TRANSFORM_ARGUMENT = re.compile(rf"\s*,?\s*({NUMBER})(%|[a-zA-Z]+)?\s*")
+# The arguments of a transform: numbers with their units, if any. A comma
+# goes only between two of them; white space alone, or nothing (as in
+# "10-20"), separates them too. Each separator can be read in only one way,
+# so a long run of white space or commas does not backtrack.
+FIRST_ARGUMENT = re.compile(rf"\s*({NUMBER})(%|[a-zA-Z]+)?")
+NEXT_ARGUMENT = re.compile(rf"(?:\s*,\s*|\s*)({NUMBER})(%|[a-zA-Z]+)?")
 # The properties the estimate reads, from attributes, <style> rules or
 # style= (the font shorthand gives font-size and font-weight).
 STYLE_PROPERTIES = ("font-size", "font-weight", "text-anchor", "dominant-baseline", "transform", "display")
@@ -180,12 +184,16 @@ FONT_SIZES = {
 SYSTEM_FONTS = {"caption", "icon", "menu", "message-box", "small-caption", "status-bar"}
 # The line height of the font shorthand: normal, a number, length or
 # percentage that is not negative (written so that a long number does not
-# backtrack), or a function such as calc().
+# backtrack), or one of the functions that may give one, in any case and
+# also over several lines.
 LENGTH_UNIT = r"(?:r?(?:em|ex|cap|ch|ic|lh)|[sld]?v(?:w|h|i|b|min|max)|cq(?:w|h|i|b|min|max)|cm|mm|q|in|pt|pc|px)"
 UNSIGNED = r"\+?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:e[+-]?[0-9]+)?"
-LINE_HEIGHT = re.compile(rf"normal|{UNSIGNED}(?:%|{LENGTH_UNIT})?|[a-z-]+\(.*\)")
+LINE_HEIGHT = re.compile(
+    rf"normal|{UNSIGNED}(?:%|{LENGTH_UNIT})?|(?:calc|min|max|clamp|var|env)\(.*\)", re.DOTALL | re.IGNORECASE
+)
 # One name of the font family list: a quoted string (blanked by _opaque),
-# or one or more identifiers, which do not start with a digit.
+# or one or more identifiers, which do not start with a digit. A CSS-wide
+# keyword alone (inherit, initial, ...) is not a family name.
 IDENTIFIER = r"(?:-?(?:[a-z_\u0080-\U0010ffff]|\\.)|--)(?:[\w\-\u0080-\U0010ffff]|\\.)*"
 FAMILY = re.compile(rf"\"[^\"]*\"|'[^']*'|{IDENTIFIER}(?:\s+{IDENTIFIER})*")
 CSS_WIDE = {"inherit", "initial", "unset", "revert", "revert-layer"}
@@ -201,9 +209,9 @@ NO_ELEMENT_RULES = re.compile(
 )
 # The media of a <style> that hold on a screen.
 SCREEN_MEDIA = {"", "all", "screen"}
-# The types of a <style> that browsers apply. Chrome compares the type of an
-# SVG <style> case-sensitively, so TEXT/CSS, text/css with parameters or any
-# other type may not be applied, and its rules are not read.
+# The types of a <style> whose rules are read. The match is exact (case,
+# parameters and white space count), so a type that a browser may not apply,
+# such as TEXT/CSS or text/css with parameters, errs toward counting.
 CSS_TYPES = {"", "text/css"}
 # Children of a <text> whose content is not drawn.
 NO_TEXT = {"title", "desc", "metadata"}
@@ -479,7 +487,7 @@ def _font_shorthand(value: str) -> dict[str, str]:
                     return {}
                 family = family[2:]
             names = " ".join(family).split(",")
-            valid = family and all(FAMILY.fullmatch(name.strip()) for name in names)
+            valid = family and all(FAMILY.fullmatch(name.strip()) and name.strip() not in CSS_WIDE for name in names)
             return {"font-size": token, **found} if valid else {}
         else:
             return {}
@@ -751,6 +759,22 @@ def _length(value: str | None, font_size: float) -> float | None:
     return _first(value)
 
 
+def _arguments(text: str) -> list[tuple[str, str]] | None:
+    """Read the arguments of a transform as (number, unit); None if they are not valid.
+
+    Read left to right, each from where the one before ends; three are
+    enough to tell that a translate has too many.
+    """
+    found, end = [], 0
+    for pattern in (FIRST_ARGUMENT, NEXT_ARGUMENT, NEXT_ARGUMENT):
+        argument = pattern.match(text, end)
+        if argument is None:
+            break
+        found.append(argument.groups(""))
+        end = argument.end()
+    return found if found and not text[end:].strip() else None
+
+
 def _translation(chain: list[ET.Element], styles: Styles) -> tuple[float, float] | str:
     """Add up the translate(...) of the chain.
 
@@ -767,15 +791,8 @@ def _translation(chain: list[ET.Element], styles: Styles) -> tuple[float, float]
         for match in TRANSFORM.finditer(value):
             if match.start() != position or match.group(1) != "translate":
                 return "transform"
-            # The arguments, read left to right; anything between them that
-            # is not a separator makes the transform one that is not read.
-            found, end = [], 0
-            for argument in TRANSFORM_ARGUMENT.finditer(match.group(2)):
-                if argument.start() != end:
-                    return "transform"
-                found.append(argument.groups(""))
-                end = argument.end()
-            if end != len(match.group(2)) or len(found) not in (1, 2):
+            found = _arguments(match.group(2))
+            if found is None or len(found) not in (1, 2):
                 return "transform"
             if any(unit.lower() not in ("", "px") for _, unit in found):
                 return "units"
