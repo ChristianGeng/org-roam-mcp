@@ -301,6 +301,17 @@ class TestOverlaps:
             budget = f'<text x="20" y="40" transform="{transform}">Budget</text>'
             assert check_svg.overlap_report(_with_labels(members + budget)) == ([], {"transform": 1}), transform
 
+    def test_translate_needs_a_separator_after_a_unit_and_at_most_two_numbers(self):
+        """translate(10px20), three numbers or a word after them are not valid; 1-2 and 1.5.5 are."""
+        members = '<text x="20" y="40">Members</text>'
+        for transform in ("translate(10px20)", "translate(1 2 3)", "translate(1 2 x)"):
+            budget = f'<text x="20" y="40" transform="{transform}">Budget</text>'
+            assert check_svg.overlap_report(_with_labels(members + budget)) == ([], {"transform": 1}), transform
+        for transform in ("translate(1-2)", "translate(1.5.5)", "translate(1px,2)", "translate(1px 2)"):
+            budget = f'<text x="20" y="40" transform="{transform}">Budget</text>'
+            warnings, skipped = check_svg.overlap_report(_with_labels(members + budget))
+            assert (len(warnings), skipped) == (1, {}), transform
+
     def test_long_translate_arguments_are_read_fast(self):
         """Long runs of white space or commas in translate() are read in linear time."""
         members = '<text x="20" y="40">Members</text>'
@@ -505,6 +516,8 @@ class TestOverlaps:
             "16px / 1.5em serif",
             "16px/calc(1em + 2px) serif",
             "16px/CALC(1em + 2px) serif",
+            "16px/round(1.2, 0.1) serif",
+            "16px/abs(1.2) serif",
             '16px "My Font", sans-serif',
             '16px "A, B", serif',
             "16px Open Sans,serif",
@@ -519,6 +532,21 @@ class TestOverlaps:
         assert check_svg.overlaps(_with_labels(rule + members + budget)) == ([], 0)
         calc = '<text x="20" y="40" style="font: calc(10px + 6px) serif">Members</text>'
         assert check_svg.overlap_report(_with_labels(calc + budget)) == ([], {"units": 1})
+
+    def test_a_negative_font_size_is_not_used(self):
+        """A negative font size is not valid: the shorthand or declaration is dropped and the earlier size holds."""
+        budget = '<text x="200" y="40">Budget</text>'
+        for labels in (
+            '<text x="20" y="40" style="font-size: 60px; font: -16px serif">Members</text>',
+            '<text x="20" y="40" style="font-size: 60px; font-size: -16px">Members</text>',
+            '<text x="20" y="40" style="font-size: 60px; font-size: -16px !important">Members</text>',
+            '<style>.a { font-size: 60px } .a { font-size: -16px }</style><text class="a" x="20" y="40">Members</text>',
+            '<g font-size="60"><text x="20" y="40" font-size="-16">Members</text></g>',
+        ):
+            assert check_svg.overlap_report(_with_labels(labels + budget)) == (
+                ["labels overlap: 'Members' and 'Budget'"],
+                {},
+            ), labels
 
     def test_keywords_are_read_in_any_case(self):
         """CSS keywords such as NONE, BOLD, MIDDLE and HANGING are case-insensitive."""

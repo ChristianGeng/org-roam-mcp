@@ -57,6 +57,10 @@ TRANSFORM = re.compile(r"\s*([a-zA-Z]+)\s*\(([^)]*)\)\s*,?")
 # so a long run of white space or commas does not backtrack.
 FIRST_ARGUMENT = re.compile(rf"\s*({NUMBER})(%|[a-zA-Z]+)?")
 NEXT_ARGUMENT = re.compile(rf"(?:\s*,\s*|\s*)({NUMBER})(%|[a-zA-Z]+)?")
+# After a number with a unit ("10px20" is not valid) a comma or white space is needed.
+AFTER_UNIT_ARGUMENT = re.compile(rf"(?:\s*,\s*|\s+)({NUMBER})(%|[a-zA-Z]+)?")
+# A negative font size, which browsers reject (the declaration is dropped).
+NEGATIVE = re.compile(r"\s*-[0-9.]")
 # The properties the estimate reads, from attributes, <style> rules or
 # style= (the font shorthand gives font-size and font-weight).
 STYLE_PROPERTIES = ("font-size", "font-weight", "text-anchor", "dominant-baseline", "transform", "display")
@@ -185,11 +189,14 @@ SYSTEM_FONTS = {"caption", "icon", "menu", "message-box", "small-caption", "stat
 # The line height of the font shorthand: normal, a number, length or
 # percentage that is not negative (written so that a long number does not
 # backtrack), or one of the functions that may give one, in any case and
-# also over several lines.
+# also over several lines. What is inside a function is not type-checked:
+# calc(1em + 2s) is taken as valid though browsers drop it, a deliberate
+# limit (the line height does not change the estimate).
 LENGTH_UNIT = r"(?:r?(?:em|ex|cap|ch|ic|lh)|[sld]?v(?:w|h|i|b|min|max)|cq(?:w|h|i|b|min|max)|cm|mm|q|in|pt|pc|px)"
 UNSIGNED = r"\+?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:e[+-]?[0-9]+)?"
 LINE_HEIGHT = re.compile(
-    rf"normal|{UNSIGNED}(?:%|{LENGTH_UNIT})?|(?:calc|min|max|clamp|var|env)\(.*\)", re.DOTALL | re.IGNORECASE
+    rf"normal|{UNSIGNED}(?:%|{LENGTH_UNIT})?|(?:calc|min|max|clamp|round|mod|rem|abs|sign|var|env)\(.*\)",
+    re.DOTALL | re.IGNORECASE,
 )
 # One name of the font family list: a quoted string (blanked by _opaque),
 # or one or more identifiers, which do not start with a digit. A CSS-wide
@@ -436,6 +443,9 @@ def _declarations(block: str) -> Declarations:
         elif key == "font-variant":
             # A shorthand passes a CSS-wide keyword on to its longhands.
             found = {**dict.fromkeys(FONT_WIDTH[:6], plain if plain in CSS_WIDE else "initial"), key: plain}
+        elif key == "font-size" and NEGATIVE.match(plain):
+            # A negative size is not valid; the earlier value holds.
+            continue
         elif key in STYLE_PROPERTIES or key in UNFOLLOWED or key in POSITIONS:
             found = {key: plain}
         else:
@@ -481,6 +491,9 @@ def _font_shorthand(value: str) -> dict[str, str]:
         elif token in FONT_PREFIX or re.fullmatch(rf"{NUMBER}(?:deg|grad|rad|turn)", token):
             continue
         elif re.match(r"[+-]?[0-9.]", token) or token in FONT_SIZES or token.startswith("calc("):
+            if token.startswith("-"):
+                # A negative size is not valid.
+                return {}
             family = tokens[i + 1 :]
             if family[:1] == ["/"]:
                 if not LINE_HEIGHT.fullmatch(family[1] if len(family) > 1 else ""):
@@ -675,7 +688,8 @@ def _cascade(
         own = {
             name: el.get(name).strip().lower()
             for name in STYLE_PROPERTIES + UNFOLLOWED_ATTRIBUTES
-            if el.get(name) is not None
+            # A negative font-size= is not valid either, and is left out.
+            if el.get(name) is not None and not (name == "font-size" and NEGATIVE.match(el.get(name)))
         }
         own.update(css)
         reasons[el] = set()
@@ -766,7 +780,8 @@ def _arguments(text: str) -> list[tuple[str, str]] | None:
     enough to tell that a translate has too many.
     """
     found, end = [], 0
-    for pattern in (FIRST_ARGUMENT, NEXT_ARGUMENT, NEXT_ARGUMENT):
+    while len(found) < 3:
+        pattern = FIRST_ARGUMENT if not found else AFTER_UNIT_ARGUMENT if found[-1][1] else NEXT_ARGUMENT
         argument = pattern.match(text, end)
         if argument is None:
             break
