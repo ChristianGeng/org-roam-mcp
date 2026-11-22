@@ -51,6 +51,16 @@ BASELINES = {
 }
 ALPHABETIC = (-0.8, 0.2)
 TRANSFORM = re.compile(r"\s*([a-zA-Z]+)\s*\(([^)]*)\)\s*,?")
+# The arguments of a transform: numbers with their units, if any. A comma
+# goes only between two of them; white space alone, or nothing (as in
+# "10-20"), separates them too. Each separator can be read in only one way,
+# so a long run of white space or commas does not backtrack.
+FIRST_ARGUMENT = re.compile(rf"\s*({NUMBER})(%|[a-zA-Z]+)?")
+NEXT_ARGUMENT = re.compile(rf"(?:\s*,\s*|\s*)({NUMBER})(%|[a-zA-Z]+)?")
+# After a number with a unit ("10px20" is not valid) a comma or white space is needed.
+AFTER_UNIT_ARGUMENT = re.compile(rf"(?:\s*,\s*|\s+)({NUMBER})(%|[a-zA-Z]+)?")
+# A negative font size, which browsers reject (the declaration is dropped).
+NEGATIVE = re.compile(r"\s*-[0-9.]")
 # The properties the estimate reads, from attributes, <style> rules or
 # style= (the font shorthand gives font-size and font-weight).
 STYLE_PROPERTIES = ("font-size", "font-weight", "text-anchor", "dominant-baseline", "transform", "display")
@@ -176,6 +186,23 @@ FONT_SIZES = {
     "smaller",
 }
 SYSTEM_FONTS = {"caption", "icon", "menu", "message-box", "small-caption", "status-bar"}
+# The line height of the font shorthand: normal, a number, length or
+# percentage that is not negative (written so that a long number does not
+# backtrack), or one of the functions that may give one, in any case and
+# also over several lines. What is inside a function is not type-checked:
+# calc(1em + 2s) is taken as valid though browsers drop it, a deliberate
+# limit (the line height does not change the estimate).
+LENGTH_UNIT = r"(?:r?(?:em|ex|cap|ch|ic|lh)|[sld]?v(?:w|h|i|b|min|max)|cq(?:w|h|i|b|min|max)|cm|mm|q|in|pt|pc|px)"
+UNSIGNED = r"\+?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:e[+-]?[0-9]+)?"
+LINE_HEIGHT = re.compile(
+    rf"normal|{UNSIGNED}(?:%|{LENGTH_UNIT})?|(?:calc|min|max|clamp|round|mod|rem|abs|sign|var|env)\(.*\)",
+    re.DOTALL | re.IGNORECASE,
+)
+# One name of the font family list: a quoted string (blanked by _opaque),
+# or one or more identifiers, which do not start with a digit. A CSS-wide
+# keyword alone (inherit, initial, ...) is not a family name.
+IDENTIFIER = r"(?:-?(?:[a-z_\u0080-\U0010ffff]|\\.)|--)(?:[\w\-\u0080-\U0010ffff]|\\.)*"
+FAMILY = re.compile(rf"\"[^\"]*\"|'[^']*'|{IDENTIFIER}(?:\s+{IDENTIFIER})*")
 CSS_WIDE = {"inherit", "initial", "unset", "revert", "revert-layer"}
 # Comments, strings and url(...) in CSS, whose braces and semicolons do not count.
 CSS_OPAQUE = re.compile(
@@ -189,6 +216,10 @@ NO_ELEMENT_RULES = re.compile(
 )
 # The media of a <style> that hold on a screen.
 SCREEN_MEDIA = {"", "all", "screen"}
+# The types of a <style> whose rules are read. The match is exact (case,
+# parameters and white space count), so a type that a browser may not apply,
+# such as TEXT/CSS or text/css with parameters, errs toward counting.
+CSS_TYPES = {"", "text/css"}
 # Children of a <text> whose content is not drawn.
 NO_TEXT = {"title", "desc", "metadata"}
 # Why a label was not checked for overlap, as the note line says it.
@@ -412,6 +443,9 @@ def _declarations(block: str) -> Declarations:
         elif key == "font-variant":
             # A shorthand passes a CSS-wide keyword on to its longhands.
             found = {**dict.fromkeys(FONT_WIDTH[:6], plain if plain in CSS_WIDE else "initial"), key: plain}
+        elif key == "font-size" and NEGATIVE.match(plain):
+            # A negative size is not valid; the earlier value holds.
+            continue
         elif key in STYLE_PROPERTIES or key in UNFOLLOWED or key in POSITIONS:
             found = {key: plain}
         else:
@@ -430,8 +464,9 @@ def _font_shorthand(value: str) -> dict[str, str]:
     weight, stretch or variant that is not given is normal, as in CSS, and
     the other width-changing font properties (font-size-adjust,
     font-kerning, font-feature-settings, ...) are reset to their initial
-    values. A shorthand without a size or without a family is not valid
-    and gives nothing. A CSS-wide keyword or a var() gives its whole value
+    values. A shorthand without a size or without a valid family list, or
+    with a line height that is not valid, is not valid and gives nothing,
+    as browsers drop it. A CSS-wide keyword or a var() gives its whole value
     to all of them. A system font (such as caption) gives its name as size
     and weight, which is then not a plain length, and resets the others.
     """
@@ -441,7 +476,7 @@ def _font_shorthand(value: str) -> dict[str, str]:
     if value in SYSTEM_FONTS:
         return {**found, "font-size": value, "font-weight": value}
     found["font-weight"] = "normal"
-    tokens = value.replace("/", " / ").split()
+    tokens = _font_tokens(value)
     for i, token in enumerate(tokens):
         number = float(token) if re.fullmatch(NUMBER, token) else None
         if token in ("bold", "bolder", "lighter") or (number is not None and 1 <= number <= 1000):
@@ -456,13 +491,34 @@ def _font_shorthand(value: str) -> dict[str, str]:
         elif token in FONT_PREFIX or re.fullmatch(rf"{NUMBER}(?:deg|grad|rad|turn)", token):
             continue
         elif re.match(r"[+-]?[0-9.]", token) or token in FONT_SIZES or token.startswith("calc("):
+            if token.startswith("-"):
+                # A negative size is not valid.
+                return {}
             family = tokens[i + 1 :]
             if family[:1] == ["/"]:
+                if not LINE_HEIGHT.fullmatch(family[1] if len(family) > 1 else ""):
+                    return {}
                 family = family[2:]
-            return {"font-size": token, **found} if family else {}
+            names = " ".join(family).split(",")
+            valid = family and all(FAMILY.fullmatch(name.strip()) and name.strip() not in CSS_WIDE for name in names)
+            return {"font-size": token, **found} if valid else {}
         else:
             return {}
     return {}
+
+
+def _font_tokens(value: str) -> list[str]:
+    """Split a font shorthand at white space and at "/", outside parentheses, so calc(1em + 2px) stays one token."""
+    tokens, current, depth = [], "", 0
+    for char in value:
+        if depth == 0 and (char.isspace() or char == "/"):
+            tokens += [current] if current else []
+            tokens += [char] if char == "/" else []
+            current = ""
+            continue
+        depth = max(0, depth + (char == "(") - (char == ")"))
+        current += char
+    return tokens + ([current] if current else [])
 
 
 def _unknown(value: str) -> bool:
@@ -604,8 +660,9 @@ def _cascade(
     for style in root.iter():
         if _local(style.tag) != "style" or not style.text:
             continue
-        # A stylesheet for media other than the screen is not followed.
-        active = (style.get("media") or "").strip().lower() in SCREEN_MEDIA
+        # A stylesheet for media other than the screen is not followed, and
+        # one in a language other than CSS may be ignored by browsers.
+        active = (style.get("media") or "").strip().lower() in SCREEN_MEDIA and style.get("type", "") in CSS_TYPES
         for selectors, body, readable in _style_rules(style.text):
             properties = _declarations(body)
             if not properties:
@@ -631,7 +688,8 @@ def _cascade(
         own = {
             name: el.get(name).strip().lower()
             for name in STYLE_PROPERTIES + UNFOLLOWED_ATTRIBUTES
-            if el.get(name) is not None
+            # A negative font-size= is not valid either, and is left out.
+            if el.get(name) is not None and not (name == "font-size" and NEGATIVE.match(el.get(name)))
         }
         own.update(css)
         reasons[el] = set()
@@ -715,8 +773,30 @@ def _length(value: str | None, font_size: float) -> float | None:
     return _first(value)
 
 
-def _translation(chain: list[ET.Element], styles: Styles) -> tuple[float, float] | None:
-    """Add up the translate(...) of the chain; None if any other transform is there."""
+def _arguments(text: str) -> list[tuple[str, str]] | None:
+    """Read the arguments of a transform as (number, unit); None if they are not valid.
+
+    Read left to right, each from where the one before ends; three are
+    enough to tell that a translate has too many.
+    """
+    found, end = [], 0
+    while len(found) < 3:
+        pattern = FIRST_ARGUMENT if not found else AFTER_UNIT_ARGUMENT if found[-1][1] else NEXT_ARGUMENT
+        argument = pattern.match(text, end)
+        if argument is None:
+            break
+        found.append(argument.groups(""))
+        end = argument.end()
+    return found if found and not text[end:].strip() else None
+
+
+def _translation(chain: list[ET.Element], styles: Styles) -> tuple[float, float] | str:
+    """Add up the translate(...) of the chain.
+
+    Returns the shift, or why it cannot be followed, as a key of SKIPPED:
+    "transform" if any other transform is there, "units" if a translate
+    has a unit other than px (such as % or em).
+    """
     dx = dy = 0.0
     for el in chain:
         value = (styles[el].get("transform") or "").strip()
@@ -725,15 +805,18 @@ def _translation(chain: list[ET.Element], styles: Styles) -> tuple[float, float]
         position = 0
         for match in TRANSFORM.finditer(value):
             if match.start() != position or match.group(1) != "translate":
-                return None
-            numbers = [float(n) for n in re.findall(NUMBER, match.group(2))]
-            if len(numbers) not in (1, 2):
-                return None
+                return "transform"
+            found = _arguments(match.group(2))
+            if found is None or len(found) not in (1, 2):
+                return "transform"
+            if any(unit.lower() not in ("", "px") for _, unit in found):
+                return "units"
+            numbers = [float(number) for number, _ in found]
             dx += numbers[0]
             dy += numbers[1] if len(numbers) == 2 else 0.0
             position = match.end()
         if position != len(value):
-            return None
+            return "transform"
     return dx, dy
 
 
@@ -895,7 +978,7 @@ def overlap_report(svg_text: str) -> tuple[list[str], dict[str, int]]:
         shift = chunks = None
         if reason is None:
             shift = _translation(chain, styles)
-            reason = "transform" if shift is None else None
+            reason = shift if isinstance(shift, str) else None
         if reason is None:
             chunks = _chunks(el, chain, styles)
             reason = "units" if chunks is None else None

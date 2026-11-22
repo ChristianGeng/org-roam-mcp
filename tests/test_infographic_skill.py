@@ -2,6 +2,7 @@
 
 import importlib.util
 from pathlib import Path
+import time
 
 
 SKILL_DIR = Path(__file__).resolve().parent.parent / "skills" / "org-roam-infographic"
@@ -279,6 +280,50 @@ class TestOverlaps:
         assert check_svg.overlaps(_with_labels(apart)) == ([], 0)
         together = apart.replace("translate(200)", "translate(0, 0) translate(5 2)")
         assert len(check_svg.overlaps(_with_labels(together))[0]) == 1
+        # px, and numbers without a separator between them, are still read.
+        for transform in ("translate(200px)", "translate(200PX, 0px)", "translate(200-0)"):
+            assert check_svg.overlaps(_with_labels(apart.replace("translate(200)", transform))) == ([], 0), transform
+
+    def test_translate_with_percent_or_em_is_skipped_and_counted(self):
+        """translate() with % or em is not read as user units; the label is counted as not a plain length (#26)."""
+        members = '<text x="20" y="40">Members</text>'
+        for transform in ("translate(50%)", "translate(2em)", "translate(200, 5%)", "translate(1e1EM 0)"):
+            for budget in (
+                f'<g transform="{transform}"><text x="20" y="40">Budget</text></g>',
+                f'<text x="20" y="40" transform="{transform}">Budget</text>',
+            ):
+                assert check_svg.overlap_report(_with_labels(members + budget)) == ([], {"units": 1}), budget
+
+    def test_translate_with_a_comma_before_or_after_its_numbers_is_not_read(self):
+        """A comma goes only between the numbers of translate(); one before or after them is not valid."""
+        members = '<text x="20" y="40">Members</text>'
+        for transform in ("translate(,200)", "translate(200,)", "translate(200,,0)"):
+            budget = f'<text x="20" y="40" transform="{transform}">Budget</text>'
+            assert check_svg.overlap_report(_with_labels(members + budget)) == ([], {"transform": 1}), transform
+
+    def test_translate_needs_a_separator_after_a_unit_and_at_most_two_numbers(self):
+        """translate(10px20), three numbers or a word after them are not valid; 1-2 and 1.5.5 are."""
+        members = '<text x="20" y="40">Members</text>'
+        for transform in ("translate(10px20)", "translate(1 2 3)", "translate(1 2 x)"):
+            budget = f'<text x="20" y="40" transform="{transform}">Budget</text>'
+            assert check_svg.overlap_report(_with_labels(members + budget)) == ([], {"transform": 1}), transform
+        for transform in ("translate(1-2)", "translate(1.5.5)", "translate(1px,2)", "translate(1px 2)"):
+            budget = f'<text x="20" y="40" transform="{transform}">Budget</text>'
+            warnings, skipped = check_svg.overlap_report(_with_labels(members + budget))
+            assert (len(warnings), skipped) == (1, {}), transform
+
+    def test_long_translate_arguments_are_read_fast(self):
+        """Long runs of white space or commas in translate() are read in linear time."""
+        members = '<text x="20" y="40">Members</text>'
+        for arguments, expected in (
+            (" " * 20000 + "x", ([], {"transform": 1})),
+            (", " * 20000 + "x", ([], {"transform": 1})),
+            ("200" + " " * 20000 + "0", ([], {})),
+        ):
+            budget = f'<text x="20" y="40" transform="translate({arguments})">Budget</text>'
+            start = time.perf_counter()
+            assert check_svg.overlap_report(_with_labels(members + budget)) == expected, arguments[:20]
+            assert time.perf_counter() - start < 0.5, arguments[:20]
 
     def test_inherited_font_size(self):
         """A large font size set on a parent <g> makes the box larger."""
@@ -443,6 +488,65 @@ class TestOverlaps:
         for font in ("bold 60px", "60px/1.2", "2000 60px serif", "60 serif", "650 16px sans-serif"):
             labels = f'<text x="20" y="40" style="font-size: 16px; font: {font}">Members</text>{budget}'
             assert check_svg.overlaps(_with_labels(labels)) == ([], 0), font
+
+    def test_an_invalid_font_shorthand_keeps_the_earlier_font(self):
+        """A font shorthand browsers drop (a family that is not a name, a bad line height) changes nothing (#27)."""
+        budget = '<text x="200" y="40">Budget</text>'
+        members = '<text class="a" x="20" y="40">Members</text>'
+        for font in (
+            "0 60px serif",
+            "16px/abc serif",
+            "16px/-1 serif",
+            "16px/1abc serif",
+            "16px/bogus(1) serif",
+            "16px 2col",
+            "16px serif,",
+            "16px inherit",
+            "16px serif, unset",
+        ):
+            in_style = f'<text x="20" y="40" style="font-size: 60px; font: {font}">Members</text>'
+            in_rule = f"<style>.a {{ font-size: 60px }} .a {{ font: {font} }}</style>" + members
+            for labels in (in_style, in_rule):
+                assert len(check_svg.overlaps(_with_labels(labels + budget))[0]) == 1, labels
+        # Valid line heights and families still set the font.
+        for font in (
+            "16px/1.2 serif",
+            "16px/normal serif",
+            "16px/120% serif",
+            "16px / 1.5em serif",
+            "16px/calc(1em + 2px) serif",
+            "16px/CALC(1em + 2px) serif",
+            "16px/round(1.2, 0.1) serif",
+            "16px/abs(1.2) serif",
+            '16px "My Font", sans-serif',
+            '16px "A, B", serif',
+            "16px Open Sans,serif",
+            "16PX/NORMAL SERIF",
+            "16px/1.2EM serif",
+        ):
+            labels = f"<text x='20' y='40' style='font-size: 60px; font: {font}'>Members</text>"
+            assert check_svg.check(_with_labels(labels + budget)) == [], font
+            assert check_svg.overlaps(_with_labels(labels + budget)) == ([], 0), font
+        # A function may span lines (in a <style>; an attribute turns line breaks into spaces).
+        rule = "<style>.a { font-size: 60px } .a { font: 16px/calc(1em +\n 2px) serif }</style>"
+        assert check_svg.overlaps(_with_labels(rule + members + budget)) == ([], 0)
+        calc = '<text x="20" y="40" style="font: calc(10px + 6px) serif">Members</text>'
+        assert check_svg.overlap_report(_with_labels(calc + budget)) == ([], {"units": 1})
+
+    def test_a_negative_font_size_is_not_used(self):
+        """A negative font size is not valid: the shorthand or declaration is dropped and the earlier size holds."""
+        budget = '<text x="200" y="40">Budget</text>'
+        for labels in (
+            '<text x="20" y="40" style="font-size: 60px; font: -16px serif">Members</text>',
+            '<text x="20" y="40" style="font-size: 60px; font-size: -16px">Members</text>',
+            '<text x="20" y="40" style="font-size: 60px; font-size: -16px !important">Members</text>',
+            '<style>.a { font-size: 60px } .a { font-size: -16px }</style><text class="a" x="20" y="40">Members</text>',
+            '<g font-size="60"><text x="20" y="40" font-size="-16">Members</text></g>',
+        ):
+            assert check_svg.overlap_report(_with_labels(labels + budget)) == (
+                ["labels overlap: 'Members' and 'Budget'"],
+                {},
+            ), labels
 
     def test_keywords_are_read_in_any_case(self):
         """CSS keywords such as NONE, BOLD, MIDDLE and HANGING are case-insensitive."""
@@ -696,6 +800,16 @@ class TestOverlaps:
         for media in ("", "all", "Screen"):
             sheet = f'<style media="{media}">text {{ display: none }}</style>'
             assert check_svg.overlap_report(_with_labels(sheet + labels)) == ([], {}), media
+
+    def test_style_with_a_type_other_than_css_is_not_read(self):
+        """A <style> whose type is not empty or text/css may be ignored; labels it may style are counted (#27)."""
+        labels = '<text x="20" y="40">Members</text><text x="20" y="40">Budget</text>'
+        for kind in ("text/scss", "text/plain", "text/css; charset=utf-8", "TEXT/CSS"):
+            sheet = f'<style type="{kind}">text {{ display: none }}</style>'
+            assert check_svg.overlap_report(_with_labels(sheet + labels)) == ([], {"style": 2}), kind
+        for kind in ("", "text/css"):
+            sheet = f'<style type="{kind}">text {{ display: none }}</style>'
+            assert check_svg.overlap_report(_with_labels(sheet + labels)) == ([], {}), kind
 
     def test_braces_and_semicolons_in_strings_and_urls(self):
         """A { } or ; inside a quoted string or url(...) does not end a rule or a declaration."""
