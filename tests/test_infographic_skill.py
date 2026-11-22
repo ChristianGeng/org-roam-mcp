@@ -457,6 +457,30 @@ class TestOverlaps:
             labels = f'<text x="20" y="40" style="font-size: 16px; font: {font}">Members</text>{budget}'
             assert check_svg.overlaps(_with_labels(labels)) == ([], 0), font
 
+    def test_an_invalid_font_shorthand_keeps_the_earlier_font(self):
+        """A font shorthand browsers drop (a family that is not a name, a bad line height) changes nothing (#27)."""
+        budget = '<text x="200" y="40">Budget</text>'
+        members = '<text class="a" x="20" y="40">Members</text>'
+        for font in ("0 60px serif", "16px/abc serif", "16px/-1 serif", "16px/1abc serif", "16px 2col", "16px serif,"):
+            in_style = f'<text x="20" y="40" style="font-size: 60px; font: {font}">Members</text>'
+            in_rule = f"<style>.a {{ font-size: 60px }} .a {{ font: {font} }}</style>" + members
+            for labels in (in_style, in_rule):
+                assert len(check_svg.overlaps(_with_labels(labels + budget))[0]) == 1, labels
+        # Valid line heights and families still set the font.
+        for font in (
+            "16px/1.2 serif",
+            "16px/normal serif",
+            "16px/120% serif",
+            "16px / 1.5em serif",
+            "16px/calc(1em + 2px) serif",
+            '16px "My Font", sans-serif',
+            "16px Open Sans,serif",
+        ):
+            labels = f'<text x="20" y="40" style="font-size: 60px; font: {font}">Members</text>'
+            assert check_svg.overlaps(_with_labels(labels + budget)) == ([], 0), font
+        calc = '<text x="20" y="40" style="font: calc(10px + 6px) serif">Members</text>'
+        assert check_svg.overlap_report(_with_labels(calc + budget)) == ([], {"units": 1})
+
     def test_keywords_are_read_in_any_case(self):
         """CSS keywords such as NONE, BOLD, MIDDLE and HANGING are case-insensitive."""
         hidden = '<style>.h { display: NONE }</style><text class="h" x="20" y="40">Long Hidden Text</text>'
@@ -709,6 +733,16 @@ class TestOverlaps:
         for media in ("", "all", "Screen"):
             sheet = f'<style media="{media}">text {{ display: none }}</style>'
             assert check_svg.overlap_report(_with_labels(sheet + labels)) == ([], {}), media
+
+    def test_style_with_a_type_other_than_css_is_not_read(self):
+        """A <style> whose type is not empty or text/css may be ignored; labels it may style are counted (#27)."""
+        labels = '<text x="20" y="40">Members</text><text x="20" y="40">Budget</text>'
+        for kind in ("text/scss", "text/plain", "text/css; charset=utf-8", "TEXT/CSS"):
+            sheet = f'<style type="{kind}">text {{ display: none }}</style>'
+            assert check_svg.overlap_report(_with_labels(sheet + labels)) == ([], {"style": 2}), kind
+        for kind in ("", "text/css"):
+            sheet = f'<style type="{kind}">text {{ display: none }}</style>'
+            assert check_svg.overlap_report(_with_labels(sheet + labels)) == ([], {}), kind
 
     def test_braces_and_semicolons_in_strings_and_urls(self):
         """A { } or ; inside a quoted string or url(...) does not end a rule or a declaration."""

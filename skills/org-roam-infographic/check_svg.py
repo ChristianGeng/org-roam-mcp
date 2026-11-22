@@ -178,6 +178,16 @@ FONT_SIZES = {
     "smaller",
 }
 SYSTEM_FONTS = {"caption", "icon", "menu", "message-box", "small-caption", "status-bar"}
+# The line height of the font shorthand: normal, a number, length or
+# percentage that is not negative (written so that a long number does not
+# backtrack), or a function such as calc().
+LENGTH_UNIT = r"(?:r?(?:em|ex|cap|ch|ic|lh)|[sld]?v(?:w|h|i|b|min|max)|cq(?:w|h|i|b|min|max)|cm|mm|q|in|pt|pc|px)"
+UNSIGNED = r"\+?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:e[+-]?[0-9]+)?"
+LINE_HEIGHT = re.compile(rf"normal|{UNSIGNED}(?:%|{LENGTH_UNIT})?|[a-z-]+\(.*\)")
+# One name of the font family list: a quoted string (blanked by _opaque),
+# or one or more identifiers, which do not start with a digit.
+IDENTIFIER = r"(?:-?(?:[a-z_\u0080-\U0010ffff]|\\.)|--)(?:[\w\-\u0080-\U0010ffff]|\\.)*"
+FAMILY = re.compile(rf"\"[^\"]*\"|'[^']*'|{IDENTIFIER}(?:\s+{IDENTIFIER})*")
 CSS_WIDE = {"inherit", "initial", "unset", "revert", "revert-layer"}
 # Comments, strings and url(...) in CSS, whose braces and semicolons do not count.
 CSS_OPAQUE = re.compile(
@@ -191,6 +201,10 @@ NO_ELEMENT_RULES = re.compile(
 )
 # The media of a <style> that hold on a screen.
 SCREEN_MEDIA = {"", "all", "screen"}
+# The types of a <style> that browsers apply. Chrome compares the type of an
+# SVG <style> case-sensitively, so TEXT/CSS, text/css with parameters or any
+# other type may not be applied, and its rules are not read.
+CSS_TYPES = {"", "text/css"}
 # Children of a <text> whose content is not drawn.
 NO_TEXT = {"title", "desc", "metadata"}
 # Why a label was not checked for overlap, as the note line says it.
@@ -432,8 +446,9 @@ def _font_shorthand(value: str) -> dict[str, str]:
     weight, stretch or variant that is not given is normal, as in CSS, and
     the other width-changing font properties (font-size-adjust,
     font-kerning, font-feature-settings, ...) are reset to their initial
-    values. A shorthand without a size or without a family is not valid
-    and gives nothing. A CSS-wide keyword or a var() gives its whole value
+    values. A shorthand without a size or without a valid family list, or
+    with a line height that is not valid, is not valid and gives nothing,
+    as browsers drop it. A CSS-wide keyword or a var() gives its whole value
     to all of them. A system font (such as caption) gives its name as size
     and weight, which is then not a plain length, and resets the others.
     """
@@ -443,7 +458,7 @@ def _font_shorthand(value: str) -> dict[str, str]:
     if value in SYSTEM_FONTS:
         return {**found, "font-size": value, "font-weight": value}
     found["font-weight"] = "normal"
-    tokens = value.replace("/", " / ").split()
+    tokens = _font_tokens(value)
     for i, token in enumerate(tokens):
         number = float(token) if re.fullmatch(NUMBER, token) else None
         if token in ("bold", "bolder", "lighter") or (number is not None and 1 <= number <= 1000):
@@ -460,11 +475,29 @@ def _font_shorthand(value: str) -> dict[str, str]:
         elif re.match(r"[+-]?[0-9.]", token) or token in FONT_SIZES or token.startswith("calc("):
             family = tokens[i + 1 :]
             if family[:1] == ["/"]:
+                if not LINE_HEIGHT.fullmatch(family[1] if len(family) > 1 else ""):
+                    return {}
                 family = family[2:]
-            return {"font-size": token, **found} if family else {}
+            names = " ".join(family).split(",")
+            valid = family and all(FAMILY.fullmatch(name.strip()) for name in names)
+            return {"font-size": token, **found} if valid else {}
         else:
             return {}
     return {}
+
+
+def _font_tokens(value: str) -> list[str]:
+    """Split a font shorthand at white space and at "/", outside parentheses, so calc(1em + 2px) stays one token."""
+    tokens, current, depth = [], "", 0
+    for char in value:
+        if depth == 0 and (char.isspace() or char == "/"):
+            tokens += [current] if current else []
+            tokens += [char] if char == "/" else []
+            current = ""
+            continue
+        depth = max(0, depth + (char == "(") - (char == ")"))
+        current += char
+    return tokens + ([current] if current else [])
 
 
 def _unknown(value: str) -> bool:
@@ -606,8 +639,9 @@ def _cascade(
     for style in root.iter():
         if _local(style.tag) != "style" or not style.text:
             continue
-        # A stylesheet for media other than the screen is not followed.
-        active = (style.get("media") or "").strip().lower() in SCREEN_MEDIA
+        # A stylesheet for media other than the screen is not followed, and
+        # one in a language other than CSS may be ignored by browsers.
+        active = (style.get("media") or "").strip().lower() in SCREEN_MEDIA and style.get("type", "") in CSS_TYPES
         for selectors, body, readable in _style_rules(style.text):
             properties = _declarations(body)
             if not properties:

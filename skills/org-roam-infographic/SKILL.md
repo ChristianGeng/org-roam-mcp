@@ -103,7 +103,8 @@ for example: `Source: org-roam notes reading-circle, club-budget; 2026-11-09`.
   a keyword it does not know, `x` or `y` set from CSS, `letter-spacing`,
   `font-stretch` and other properties that change the width,
   `writing-mode`, `alignment-baseline` or `visibility`, or styled by other
-  `<style>` rules, such as `g text`, `@media` or a `<style media="print">`)
+  `<style>` rules, such as `g text`, `@media`, a `<style media="print">`
+  or a `<style type="text/scss">`)
   are counted by kind in a `note:` line; look at those in the rendered
   picture.
 - Render the file once and look at it, for example with
