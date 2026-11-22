@@ -279,6 +279,19 @@ class TestOverlaps:
         assert check_svg.overlaps(_with_labels(apart)) == ([], 0)
         together = apart.replace("translate(200)", "translate(0, 0) translate(5 2)")
         assert len(check_svg.overlaps(_with_labels(together))[0]) == 1
+        # px, and numbers without a separator between them, are still read.
+        for transform in ("translate(200px)", "translate(200PX, 0px)", "translate(200-0)"):
+            assert check_svg.overlaps(_with_labels(apart.replace("translate(200)", transform))) == ([], 0), transform
+
+    def test_translate_with_percent_or_em_is_skipped_and_counted(self):
+        """translate() with % or em is not read as user units; the label is counted as not a plain length (#26)."""
+        members = '<text x="20" y="40">Members</text>'
+        for transform in ("translate(50%)", "translate(2em)", "translate(200, 5%)", "translate(1e1EM 0)"):
+            for budget in (
+                f'<g transform="{transform}"><text x="20" y="40">Budget</text></g>',
+                f'<text x="20" y="40" transform="{transform}">Budget</text>',
+            ):
+                assert check_svg.overlap_report(_with_labels(members + budget)) == ([], {"units": 1}), budget
 
     def test_inherited_font_size(self):
         """A large font size set on a parent <g> makes the box larger."""

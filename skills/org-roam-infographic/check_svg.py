@@ -51,6 +51,8 @@ BASELINES = {
 }
 ALPHABETIC = (-0.8, 0.2)
 TRANSFORM = re.compile(r"\s*([a-zA-Z]+)\s*\(([^)]*)\)\s*,?")
+# One argument of a transform: a number with its unit, if any.
+TRANSFORM_ARGUMENT = re.compile(rf"\s*,?\s*({NUMBER})(%|[a-zA-Z]+)?\s*")
 # The properties the estimate reads, from attributes, <style> rules or
 # style= (the font shorthand gives font-size and font-weight).
 STYLE_PROPERTIES = ("font-size", "font-weight", "text-anchor", "dominant-baseline", "transform", "display")
@@ -715,8 +717,13 @@ def _length(value: str | None, font_size: float) -> float | None:
     return _first(value)
 
 
-def _translation(chain: list[ET.Element], styles: Styles) -> tuple[float, float] | None:
-    """Add up the translate(...) of the chain; None if any other transform is there."""
+def _translation(chain: list[ET.Element], styles: Styles) -> tuple[float, float] | str:
+    """Add up the translate(...) of the chain.
+
+    Returns the shift, or why it cannot be followed, as a key of SKIPPED:
+    "transform" if any other transform is there, "units" if a translate
+    has a unit other than px (such as % or em).
+    """
     dx = dy = 0.0
     for el in chain:
         value = (styles[el].get("transform") or "").strip()
@@ -725,15 +732,25 @@ def _translation(chain: list[ET.Element], styles: Styles) -> tuple[float, float]
         position = 0
         for match in TRANSFORM.finditer(value):
             if match.start() != position or match.group(1) != "translate":
-                return None
-            numbers = [float(n) for n in re.findall(NUMBER, match.group(2))]
-            if len(numbers) not in (1, 2):
-                return None
+                return "transform"
+            # The arguments, read left to right; anything between them that
+            # is not a separator makes the transform one that is not read.
+            found, end = [], 0
+            for argument in TRANSFORM_ARGUMENT.finditer(match.group(2)):
+                if argument.start() != end:
+                    return "transform"
+                found.append(argument.groups(""))
+                end = argument.end()
+            if end != len(match.group(2)) or len(found) not in (1, 2):
+                return "transform"
+            if any(unit.lower() not in ("", "px") for _, unit in found):
+                return "units"
+            numbers = [float(number) for number, _ in found]
             dx += numbers[0]
             dy += numbers[1] if len(numbers) == 2 else 0.0
             position = match.end()
         if position != len(value):
-            return None
+            return "transform"
     return dx, dy
 
 
@@ -895,7 +912,7 @@ def overlap_report(svg_text: str) -> tuple[list[str], dict[str, int]]:
         shift = chunks = None
         if reason is None:
             shift = _translation(chain, styles)
-            reason = "transform" if shift is None else None
+            reason = shift if isinstance(shift, str) else None
         if reason is None:
             chunks = _chunks(el, chain, styles)
             reason = "units" if chunks is None else None
