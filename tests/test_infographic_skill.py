@@ -518,6 +518,11 @@ class TestOverlaps:
             "16px/CALC(1em + 2px) serif",
             "16px/round(1.2, 0.1) serif",
             "16px/abs(1.2) serif",
+            "16px/sqrt(4) serif",
+            "16px/pow(2, 3) serif",
+            "16px/hypot(3, 4) serif",
+            "16px/atan2(1, 1) serif",
+            "16px/LOG(10) serif",
             '16px "My Font", sans-serif',
             '16px "A, B", serif',
             "16px Open Sans,serif",
@@ -547,6 +552,16 @@ class TestOverlaps:
                 ["labels overlap: 'Members' and 'Budget'"],
                 {},
             ), labels
+
+    def test_a_size_of_negative_zero_is_valid(self):
+        """-0 is a valid font size of 0: it is used, not dropped in favour of the earlier size."""
+        budget = '<text x="200" y="40">Budget</text>'
+        for labels in (
+            '<text x="20" y="40" style="font-size: 60px; font: -0 serif">Members</text>',
+            '<text x="20" y="40" style="font-size: 60px; font-size: -0">Members</text>',
+            '<g font-size="60"><text x="20" y="40" font-size="-0">Members</text></g>',
+        ):
+            assert not check_svg.overlaps(_with_labels(labels + budget))[0], labels
 
     def test_keywords_are_read_in_any_case(self):
         """CSS keywords such as NONE, BOLD, MIDDLE and HANGING are case-insensitive."""

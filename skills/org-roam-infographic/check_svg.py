@@ -60,7 +60,8 @@ NEXT_ARGUMENT = re.compile(rf"(?:\s*,\s*|\s*)({NUMBER})(%|[a-zA-Z]+)?")
 # After a number with a unit ("10px20" is not valid) a comma or white space is needed.
 AFTER_UNIT_ARGUMENT = re.compile(rf"(?:\s*,\s*|\s+)({NUMBER})(%|[a-zA-Z]+)?")
 # A negative font size, which browsers reject (the declaration is dropped).
-NEGATIVE = re.compile(r"\s*-[0-9.]")
+# -0 (also -0.0, -0px) is a valid size of 0, so it does not count.
+NEGATIVE = re.compile(r"\s*-(?!0*(?:\.0*)?(?![0-9.]))[0-9.]")
 # The properties the estimate reads, from attributes, <style> rules or
 # style= (the font shorthand gives font-size and font-weight).
 STYLE_PROPERTIES = ("font-size", "font-weight", "text-anchor", "dominant-baseline", "transform", "display")
@@ -195,7 +196,7 @@ SYSTEM_FONTS = {"caption", "icon", "menu", "message-box", "small-caption", "stat
 LENGTH_UNIT = r"(?:r?(?:em|ex|cap|ch|ic|lh)|[sld]?v(?:w|h|i|b|min|max)|cq(?:w|h|i|b|min|max)|cm|mm|q|in|pt|pc|px)"
 UNSIGNED = r"\+?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:e[+-]?[0-9]+)?"
 LINE_HEIGHT = re.compile(
-    rf"normal|{UNSIGNED}(?:%|{LENGTH_UNIT})?|(?:calc|min|max|clamp|round|mod|rem|abs|sign|var|env)\(.*\)",
+    rf"normal|{UNSIGNED}(?:%|{LENGTH_UNIT})?|(?:calc|min|max|clamp|round|mod|rem|abs|sign|var|env|pow|sqrt|hypot|log|exp|a?(?:sin|cos|tan)|atan2)\(.*\)",
     re.DOTALL | re.IGNORECASE,
 )
 # One name of the font family list: a quoted string (blanked by _opaque),
