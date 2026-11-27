@@ -499,6 +499,24 @@ class TestOverlaps:
             "16px/-1 serif",
             "16px/1abc serif",
             "16px/bogus(1) serif",
+            # Angle-valued functions are not line heights.
+            "16px/atan2(1, 1) serif",
+            "16px/asin(1) serif",
+            "16px/acos(1) serif",
+            "16px/atan(1) serif",
+            # Wrong number of arguments.
+            "16px/pow(2) serif",
+            "16px/pow(2, 3, 4) serif",
+            "16px/sqrt() serif",
+            "16px/sqrt(1, 2) serif",
+            "16px/exp(1, 2) serif",
+            "16px/log() serif",
+            "16px/log(1, 2, 3) serif",
+            "16px/hypot() serif",
+            "16px/hypot(1,) serif",
+            "16px/sin(1, 2) serif",
+            "16px/cos() serif",
+            "16px/tan(1, 2) serif",
             "16px 2col",
             "16px serif,",
             "16px inherit",
@@ -521,8 +539,11 @@ class TestOverlaps:
             "16px/sqrt(4) serif",
             "16px/pow(2, 3) serif",
             "16px/hypot(3, 4) serif",
-            "16px/atan2(1, 1) serif",
             "16px/LOG(10) serif",
+            "16px/log(8, 2) serif",
+            "16px/hypot(3) serif",
+            "16px/sin(1) serif",
+            "16px/calc(1px * pow(2, 3)) serif",
             '16px "My Font", sans-serif',
             '16px "A, B", serif',
             "16px Open Sans,serif",
@@ -556,12 +577,24 @@ class TestOverlaps:
     def test_a_size_of_negative_zero_is_valid(self):
         """-0 is a valid font size of 0: it is used, not dropped in favour of the earlier size."""
         budget = '<text x="200" y="40">Budget</text>'
-        for labels in (
-            '<text x="20" y="40" style="font-size: 60px; font: -0 serif">Members</text>',
-            '<text x="20" y="40" style="font-size: 60px; font-size: -0">Members</text>',
-            '<g font-size="60"><text x="20" y="40" font-size="-0">Members</text></g>',
-        ):
-            assert not check_svg.overlaps(_with_labels(labels + budget))[0], labels
+        for size in ("-0", "-0.0", "-.0", "-0px", "-0em", "-0rem", "-0pt", "-0%", "-00.00px"):
+            for labels in (
+                f'<text x="20" y="40" style="font-size: 60px; font: {size} serif">Members</text>',
+                f'<text x="20" y="40" style="font-size: 60px; font-size: {size}">Members</text>',
+                f'<g font-size="60"><text x="20" y="40" font-size="{size}">Members</text></g>',
+            ):
+                assert not check_svg.overlaps(_with_labels(labels + budget))[0], labels
+
+    def test_only_a_real_negative_zero_is_a_valid_size(self):
+        """-0foo or -0.foo are not sizes: the declaration is dropped and the earlier size holds."""
+        budget = '<text x="200" y="40">Budget</text>'
+        for size in ("-0foo", "-0.foo", "-0.0foo", "-0px20", "-0.5", "-01", "-0.1px"):
+            for labels in (
+                f'<text x="20" y="40" style="font-size: 60px; font: {size} serif">Members</text>',
+                f'<text x="20" y="40" style="font-size: 60px; font-size: {size}">Members</text>',
+                f'<g font-size="60"><text x="20" y="40" font-size="{size}">Members</text></g>',
+            ):
+                assert len(check_svg.overlaps(_with_labels(labels + budget))[0]) == 1, labels
 
     def test_keywords_are_read_in_any_case(self):
         """CSS keywords such as NONE, BOLD, MIDDLE and HANGING are case-insensitive."""
