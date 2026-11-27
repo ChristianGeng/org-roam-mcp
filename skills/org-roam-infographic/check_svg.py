@@ -59,8 +59,6 @@ FIRST_ARGUMENT = re.compile(rf"\s*({NUMBER})(%|[a-zA-Z]+)?")
 NEXT_ARGUMENT = re.compile(rf"(?:\s*,\s*|\s*)({NUMBER})(%|[a-zA-Z]+)?")
 # After a number with a unit ("10px20" is not valid) a comma or white space is needed.
 AFTER_UNIT_ARGUMENT = re.compile(rf"(?:\s*,\s*|\s+)({NUMBER})(%|[a-zA-Z]+)?")
-# A negative font size, which browsers reject (the declaration is dropped).
-NEGATIVE = re.compile(r"\s*-[0-9.]")
 # The properties the estimate reads, from attributes, <style> rules or
 # style= (the font shorthand gives font-size and font-weight).
 STYLE_PROPERTIES = ("font-size", "font-weight", "text-anchor", "dominant-baseline", "transform", "display")
@@ -198,6 +196,55 @@ LINE_HEIGHT = re.compile(
     rf"normal|{UNSIGNED}(?:%|{LENGTH_UNIT})?|(?:calc|min|max|clamp|round|mod|rem|abs|sign|var|env)\(.*\)",
     re.DOTALL | re.IGNORECASE,
 )
+# Functions with a fixed number of arguments (min, max or None for no limit).
+# asin, acos, atan and atan2 give an angle, which a line height cannot be.
+ARGUMENT_COUNTS = {
+    "pow": (2, 2),
+    "sqrt": (1, 1),
+    "exp": (1, 1),
+    "log": (1, 2),
+    "hypot": (1, None),
+    "sin": (1, 1),
+    "cos": (1, 1),
+    "tan": (1, 1),
+}
+COUNTED_FUNCTION = re.compile(r"(pow|sqrt|exp|log|hypot|sin|cos|tan)\((.*)\)", re.DOTALL | re.IGNORECASE | re.ASCII)
+# A negative font size is not valid; browsers drop the declaration. -0 (also
+# -0.0, -.0, -0px, -0%) is a valid size of 0, so it does not count.
+NEGATIVE_ZERO = re.compile(rf"-(?:0+(?:\.0+)?|\.0+)(?:e[+-]?[0-9]+)?(?:%|{LENGTH_UNIT})?", re.IGNORECASE)
+
+
+def _negative_size(value: str) -> bool:
+    """Whether a font size is negative, and not a zero such as -0."""
+    value = value.strip()
+    return bool(re.match(r"-[0-9.]", value)) and not NEGATIVE_ZERO.fullmatch(value)
+
+
+def _line_height(token: str) -> bool:
+    """Whether a token is a valid line height of the font shorthand."""
+    if LINE_HEIGHT.fullmatch(token):
+        return True
+    counted = COUNTED_FUNCTION.fullmatch(token)
+    if not counted:
+        return False
+    # Count the arguments at the top level; an empty one is not valid.
+    arguments, depth, current = [], 0, ""
+    for char in counted.group(2):
+        if char == "," and depth == 0:
+            arguments.append(current)
+            current = ""
+            continue
+        depth += (char == "(") - (char == ")")
+        if depth < 0:
+            return False
+        current += char
+    arguments.append(current)
+    limits = ARGUMENT_COUNTS.get(counted.group(1).lower())
+    if limits is None:
+        return False
+    low, high = limits
+    count = len(arguments)
+    return depth == 0 and all(a.strip() for a in arguments) and count >= low and (high is None or count <= high)
 # One name of the font family list: a quoted string (blanked by _opaque),
 # or one or more identifiers, which do not start with a digit. A CSS-wide
 # keyword alone (inherit, initial, ...) is not a family name.
@@ -443,7 +490,7 @@ def _declarations(block: str) -> Declarations:
         elif key == "font-variant":
             # A shorthand passes a CSS-wide keyword on to its longhands.
             found = {**dict.fromkeys(FONT_WIDTH[:6], plain if plain in CSS_WIDE else "initial"), key: plain}
-        elif key == "font-size" and NEGATIVE.match(plain):
+        elif key == "font-size" and _negative_size(plain):
             # A negative size is not valid; the earlier value holds.
             continue
         elif key in STYLE_PROPERTIES or key in UNFOLLOWED or key in POSITIONS:
@@ -491,12 +538,12 @@ def _font_shorthand(value: str) -> dict[str, str]:
         elif token in FONT_PREFIX or re.fullmatch(rf"{NUMBER}(?:deg|grad|rad|turn)", token):
             continue
         elif re.match(r"[+-]?[0-9.]", token) or token in FONT_SIZES or token.startswith("calc("):
-            if token.startswith("-"):
-                # A negative size is not valid.
+            if _negative_size(token):
+                # A negative size is not valid (-0 is).
                 return {}
             family = tokens[i + 1 :]
             if family[:1] == ["/"]:
-                if not LINE_HEIGHT.fullmatch(family[1] if len(family) > 1 else ""):
+                if not _line_height(family[1] if len(family) > 1 else ""):
                     return {}
                 family = family[2:]
             names = " ".join(family).split(",")
@@ -689,7 +736,7 @@ def _cascade(
             name: el.get(name).strip().lower()
             for name in STYLE_PROPERTIES + UNFOLLOWED_ATTRIBUTES
             # A negative font-size= is not valid either, and is left out.
-            if el.get(name) is not None and not (name == "font-size" and NEGATIVE.match(el.get(name)))
+            if el.get(name) is not None and not (name == "font-size" and _negative_size(el.get(name)))
         }
         own.update(css)
         reasons[el] = set()
