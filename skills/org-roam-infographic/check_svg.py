@@ -208,10 +208,10 @@ ARGUMENT_COUNTS = {
     "cos": (1, 1),
     "tan": (1, 1),
 }
-COUNTED_FUNCTION = re.compile(r"(pow|sqrt|exp|log|hypot|sin|cos|tan)\((.*)\)", re.DOTALL | re.IGNORECASE)
+COUNTED_FUNCTION = re.compile(r"(pow|sqrt|exp|log|hypot|sin|cos|tan)\((.*)\)", re.DOTALL | re.IGNORECASE | re.ASCII)
 # A negative font size is not valid; browsers drop the declaration. -0 (also
 # -0.0, -.0, -0px, -0%) is a valid size of 0, so it does not count.
-NEGATIVE_ZERO = re.compile(rf"-(?:0+(?:\.0*)?|\.0+)(?:e[+-]?[0-9]+)?(?:%|{LENGTH_UNIT})?", re.IGNORECASE)
+NEGATIVE_ZERO = re.compile(rf"-(?:0+(?:\.0+)?|\.0+)(?:e[+-]?[0-9]+)?(?:%|{LENGTH_UNIT})?", re.IGNORECASE)
 
 
 def _negative_size(value: str) -> bool:
@@ -239,7 +239,10 @@ def _line_height(token: str) -> bool:
             return False
         current += char
     arguments.append(current)
-    low, high = ARGUMENT_COUNTS[counted.group(1).lower()]
+    limits = ARGUMENT_COUNTS.get(counted.group(1).lower())
+    if limits is None:
+        return False
+    low, high = limits
     count = len(arguments)
     return depth == 0 and all(a.strip() for a in arguments) and count >= low and (high is None or count <= high)
 # One name of the font family list: a quoted string (blanked by _opaque),

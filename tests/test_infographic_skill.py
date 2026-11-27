@@ -504,6 +504,9 @@ class TestOverlaps:
             "16px/asin(1) serif",
             "16px/acos(1) serif",
             "16px/atan(1) serif",
+            # Look-alike letters are not function names (no crash).
+            "16px/sın(1) serif",
+            "16px/ſin(1) serif",
             # Wrong number of arguments.
             "16px/pow(2) serif",
             "16px/pow(2, 3, 4) serif",
@@ -588,7 +591,7 @@ class TestOverlaps:
     def test_only_a_real_negative_zero_is_a_valid_size(self):
         """-0foo or -0.foo are not sizes: the declaration is dropped and the earlier size holds."""
         budget = '<text x="200" y="40">Budget</text>'
-        for size in ("-0foo", "-0.foo", "-0.0foo", "-0px20", "-0.5", "-01", "-0.1px"):
+        for size in ("-0foo", "-0.foo", "-0.px", "-0.", "-0.0foo", "-0px20", "-0.5", "-01", "-0.1px"):
             for labels in (
                 f'<text x="20" y="40" style="font-size: 60px; font: {size} serif">Members</text>',
                 f'<text x="20" y="40" style="font-size: 60px; font-size: {size}">Members</text>',
